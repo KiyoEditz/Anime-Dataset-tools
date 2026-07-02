@@ -1,0 +1,7 @@
+ebooklib==0.18
+beautifulsoup4==4.12.3
+pdfplumber==0.11.4
+openai==1.51.0
+tqdm==4.66.5
+tenacity==8.5.0
+python-dotenv
