@@ -132,6 +132,6 @@ cython_debug/
 *.swo
 
 # Project specific
-input/
-output/
-text/
+input/*
+output/*
+text/*
