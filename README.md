@@ -163,6 +163,45 @@ profil Elaina begitu ukurannya melewati `MAX_PROFILE_CHARS`, supaya
 profil yang terus terakumulasi dari bab ke bab tidak membengkak dan
 menghabiskan context window di novel yang banyak babnya.
 
+## Kalau script berhenti karena rate limit / error
+
+Sejak update terbaru, `persona_extractor.py` dan `dialogue_extractor.py`
+otomatis menyimpan checkpoint (`output/persona_checkpoint.json` dan
+`output/dialogue_checkpoint.json`) setelah setiap bab selesai diproses.
+
+- **Rate limit SINGKAT** (mis. limit per-menit) → script otomatis
+  menunggu lalu lanjut sendiri, tidak perlu tindakan apapun.
+- **Rate limit PANJANG** (mis. limit token harian seperti Groq free tier
+  yang cuma 100.000 token/hari) → script akan BERHENTI dengan pesan jelas
+  berapa lama harus menunggu. Progress kamu **aman**, tidak hilang.
+  Tunggu sampai waktu yang disebutkan (atau besok kalau itu limit harian),
+  lalu jalankan ulang perintah yang sama persis:
+
+  ```bash
+  python persona_extractor.py     # atau python run_all.py
+  ```
+
+  Script akan melanjutkan dari bab terakhir yang berhasil, bukan mengulang
+  dari bab 1.
+
+**Catatan realistis soal kuota Groq gratis**: limit 100.000 token/hari
+untuk `llama-3.3-70b-versatile` cukup kecil untuk novel panjang — dari
+pengalaman, ~14 bab profil ekstraksi saja bisa menghabiskan kuota harian.
+Untuk novel 80+ bab, kemungkinan besar kamu butuh beberapa hari berturut
+(checkpoint akan menangani ini dengan aman), ATAU pertimbangkan pindah ke
+Claude (via OpenRouter/LiteLLM) untuk proses yang jauh lebih cepat selesai
+tanpa terputus-putus oleh limit harian.
+
+**Kalau menambah volume baru** dan checkpoint lama sudah ada, hapus dulu
+kedua file checkpoint sebelum rerun (supaya seluruh pipeline diproses
+ulang secara kronologis dan konsisten dari awal, sesuai penjelasan di
+bagian "Cara pakai" di atas):
+
+```bash
+rm -f output/persona_checkpoint.json output/dialogue_checkpoint.json
+rm -f output/raw_dialogue_pairs.jsonl output/elaina_profile.json
+```
+
 ## Tuning kualitas
 
 - Kalau hasil ekstraksi bab dari PDF berantakan (header/footer ikut

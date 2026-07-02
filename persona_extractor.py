@@ -38,6 +38,12 @@ PERSONA_CHUNK_CHARS = int(os.environ.get("PERSONA_CHUNK_CHARS", "6000"))
 # sebelum lanjut ke bab berikutnya.
 MAX_PROFILE_CHARS = int(os.environ.get("MAX_PROFILE_CHARS", "8000"))
 
+# Checkpoint: menyimpan profil + nama bab terakhir yang selesai diproses,
+# supaya kalau script terhenti di tengah jalan (error, rate limit harian,
+# listrik mati, dll), rerun berikutnya MELANJUTKAN dari titik terakhir --
+# bukan mengulang semua bab dari awal (yang buang-buang kuota API).
+CHECKPOINT_FILE = OUTPUT_DIR / "persona_checkpoint.json"
+
 PROFILE_SCHEMA_HINT = """
 Format JSON yang HARUS kamu hasilkan (object tunggal):
 {
@@ -102,6 +108,29 @@ def compress_profile(profile: dict) -> dict:
     return profile
 
 
+def load_checkpoint():
+    """Kembalikan (nama_bab_terakhir_selesai, profil) dari checkpoint, atau (None, {}) kalau belum ada."""
+    if not CHECKPOINT_FILE.exists():
+        return None, {}
+    try:
+        data = json.loads(CHECKPOINT_FILE.read_text(encoding="utf-8"))
+        return data.get("last_completed_chapter"), data.get("profile", {})
+    except json.JSONDecodeError:
+        print("[WARN] Checkpoint rusak/tidak terbaca, mulai dari awal.")
+        return None, {}
+
+
+def save_checkpoint(last_completed_chapter: str, profile: dict):
+    OUTPUT_DIR.mkdir(exist_ok=True)
+    CHECKPOINT_FILE.write_text(
+        json.dumps(
+            {"last_completed_chapter": last_completed_chapter, "profile": profile},
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+
 def merge_profile(existing: dict, update: dict) -> dict:
     """Gabungkan profil lama dengan hasil update dari satu bab."""
     if not existing:
@@ -134,7 +163,32 @@ def build_profile():
     if not chapter_files:
         raise SystemExit("Tidak ada file bab di text/. Jalankan extract_text.py dulu.")
 
-    profile = {}
+    last_completed, profile = load_checkpoint()
+
+    if last_completed:
+        chapter_names = [p.name for p in chapter_files]
+        if last_completed in chapter_names:
+            resume_idx = chapter_names.index(last_completed)
+            skipped = chapter_files[: resume_idx + 1]
+            chapter_files = chapter_files[resume_idx + 1 :]
+            print(
+                f"[INFO] Melanjutkan dari checkpoint: {len(skipped)} bab sudah "
+                f"selesai sebelumnya (terakhir: {last_completed}), "
+                f"sisa {len(chapter_files)} bab."
+            )
+        else:
+            print(
+                f"[WARN] Checkpoint menyebut '{last_completed}' tapi file itu tidak "
+                f"ditemukan lagi di text/ (mungkin daftar bab berubah karena "
+                f"nambah/ubah volume). Memproses ULANG SEMUA bab dari awal supaya "
+                f"konsisten. Hapus output/persona_checkpoint.json dulu kalau ini "
+                f"tidak diinginkan."
+            )
+            profile = {}
+
+    if not chapter_files:
+        print("[INFO] Semua bab sudah selesai diproses (sesuai checkpoint).")
+
     for chap_path in tqdm(chapter_files, desc="Membangun profil Elaina"):
         chapter_text = chap_path.read_text(encoding="utf-8")
 
@@ -152,7 +206,11 @@ def build_profile():
                 profile = compress_profile(profile)
         except ValueError as e:
             print(f"[WARN] Lewati {chap_path.name}: {e}")
-            continue
+
+        # Simpan checkpoint SETELAH tiap bab (berhasil ataupun di-skip karena
+        # ValueError) supaya kalau bab BERIKUTNYA gagal dengan error yang tidak
+        # tertangani (mis. rate limit harian), progress sampai bab ini tetap aman.
+        save_checkpoint(chap_path.name, profile)
 
     OUTPUT_DIR.mkdir(exist_ok=True)
     with open(OUTPUT_DIR / "elaina_profile.json", "w", encoding="utf-8") as f:
