@@ -1,19 +1,19 @@
 """
 extract_text.py
 
-Tahap 1: Ekstraksi teks mentah dari file EPUB/PDF novel menjadi
-file .txt per-bab yang bersih, siap diproses oleh tahap berikutnya.
+Stage 1: Extract raw text from EPUB/PDF novel files into clean per-chapter
+.txt files, ready for the next stage of the pipeline.
 
-Cara pakai:
-    1. Taruh semua file .epub / .pdf novel di folder input/
-       (urutkan nama file agar sesuai urutan volume/bab, misal:
-        01_volume1.epub, 02_volume2.epub, dst.)
-    2. Jalankan:
+Usage:
+    1. Put all .epub / .pdf novel files in the input/ folder
+       (name files so they sort in volume/chapter order, e.g.
+        01_volume1.epub, 02_volume2.epub, etc.)
+    2. Run:
        python extract_text.py
 
-Hasil:
-    text/chapter_0001.txt, text/chapter_0002.txt, dst.
-    text/manifest.json  -> metadata urutan & sumber tiap bab
+Output:
+    text/chapter_0001.txt, text/chapter_0002.txt, etc.
+    text/manifest.json  -> order & source metadata for each chapter
 """
 
 import json
@@ -29,32 +29,32 @@ import ebooklib
 
 INPUT_DIR = Path("input")
 OUTPUT_DIR = Path("text")
-MIN_CHAPTER_CHARS = 400  # buang fragmen terlalu pendek (halaman judul, dll)
+MIN_CHAPTER_CHARS = 400  # drop fragments that are too short (title pages, etc.)
 
-# Hanya N baris pertama & terakhir tiap halaman yang dianggap kandidat
-# header/footer/nomor halaman (di situlah noise jenis ini biasanya muncul).
-# Untuk halaman pendek, zona ini otomatis diperkecil (lihat _edge_zone_size)
-# supaya tidak pernah menelan sebagian besar isi halaman.
+# Only the first & last N lines of each page are treated as candidates for
+# header/footer/page-number noise (that's where this kind of noise usually
+# shows up). For short pages, this zone is automatically shrunk (see
+# _edge_zone_size) so it never swallows most of a page's content.
 BOILERPLATE_EDGE_LINES = 3
-# Minimal jumlah halaman sebelum deteksi pola berulang dijalankan
-# (di buku pendek, "berulang" tidak cukup bermakna secara statistik).
+# Minimum number of pages before repeated-pattern detection kicks in
+# (in short books, "repeated" isn't statistically meaningful).
 BOILERPLATE_MIN_PAGES = 8
-# Kalau sebuah baris (setelah dinormalisasi) muncul di >= proporsi ini
-# dari total halaman, dianggap boilerplate dan dibuang. Diset cukup tinggi
-# (lebih dari separuh halaman) karena header/footer/nomor halaman asli
-# biasanya muncul di HAMPIR SEMUA halaman -- ambang tinggi mengurangi risiko
-# salah membuang kalimat cerita yang kebetulan mirip.
+# If a line (after normalization) appears on >= this fraction of pages,
+# it's treated as boilerplate and stripped. Set fairly high (more than half
+# of all pages) because genuine headers/footers/page numbers usually appear
+# on ALMOST EVERY page -- a high threshold reduces the risk of accidentally
+# stripping a story sentence that happens to look similar across pages.
 BOILERPLATE_FREQ_THRESHOLD = 0.5
 
 
 def _edge_zone_size(total_lines: int) -> int:
-    """Ukuran zona tepi yang diperiksa, diskalakan agar tidak pernah melebihi
-    ~25% dari total baris halaman (penting untuk halaman pendek)."""
+    """Size of the edge zone to inspect, scaled so it never exceeds
+    ~25% of a page's total lines (important for short pages)."""
     return max(1, min(BOILERPLATE_EDGE_LINES, total_lines // 4))
 
 
 def _normalize_line(line: str) -> str:
-    """Normalisasi baris untuk perbandingan: rapikan spasi, ganti angka jadi '#'."""
+    """Normalize a line for comparison: collapse whitespace, replace digits with '#'."""
     s = line.strip()
     s = re.sub(r"\d+", "#", s)
     s = re.sub(r"\s+", " ", s)
@@ -63,13 +63,13 @@ def _normalize_line(line: str) -> str:
 
 def strip_repeating_boilerplate(pages: list[str]) -> list[str]:
     """
-    Deteksi & buang baris yang berulang di banyak halaman secara identik
-    (setelah angka dinormalisasi) -- pola khas nomor halaman, running
-    header/footer (judul buku, nama penulis, dst). Hanya memeriksa
-    beberapa baris di tepi atas/bawah tiap halaman supaya tidak pernah
-    menyentuh isi cerita di tengah halaman. Baris yang menyerupai penanda
-    bab (Chapter/Prologue/Epilogue) sengaja dikecualikan agar
-    split_into_chapters() tetap bisa mendeteksinya.
+    Detect & strip lines that repeat identically across many pages (after
+    digit normalization) -- the classic pattern for page numbers, running
+    headers/footers (book title, author name, etc.). Only checks a few
+    lines at the top/bottom edge of each page so it never touches story
+    content in the middle of a page. Lines that look like chapter markers
+    (Chapter/Prologue/Epilogue) are deliberately excluded so
+    split_into_chapters() can still detect them.
     """
     if len(pages) < BOILERPLATE_MIN_PAGES:
         return pages
@@ -103,7 +103,7 @@ def strip_repeating_boilerplate(pages: list[str]) -> list[str]:
         return pages
 
     sample = ", ".join(list(boilerplate)[:3])
-    print(f"[INFO] {len(boilerplate)} pola noise berulang terdeteksi & dibuang (contoh: {sample})")
+    print(f"[INFO] Detected & removed {len(boilerplate)} repeating noise pattern(s) (example: {sample})")
 
     cleaned_pages = []
     for lines in page_lines:
@@ -122,22 +122,22 @@ def strip_repeating_boilerplate(pages: list[str]) -> list[str]:
 
 
 def clean_text(raw: str) -> str:
-    """Bersihkan whitespace berlebih, hyphenation patah baris, dsb."""
+    """Clean up excess whitespace, broken line-end hyphenation, etc."""
     text = raw.replace("\r\n", "\n").replace("\r", "\n")
-    # gabungkan kata yang terpenggal tanda hubung di akhir baris (umum di PDF)
+    # rejoin words split by a hyphen at line end (common in PDFs)
     text = re.sub(r"-\n(?=[a-z])", "", text)
-    # rapikan baris kosong berlebih
+    # collapse excess blank lines
     text = re.sub(r"\n{3,}", "\n\n", text)
-    # rapikan spasi ganda
+    # collapse repeated spaces
     text = re.sub(r"[ \t]{2,}", " ", text)
     return text.strip()
 
 
 def split_into_chapters(text: str) -> list[str]:
     """
-    Heuristik pemisah bab: cari pola umum seperti
-    'Chapter 1', 'Chapter One', 'Prologue', 'Epilogue', angka romawi, dll.
-    Kalau tidak ditemukan pola jelas, fallback ke pemotongan per ~3000 kata.
+    Heuristic chapter splitter: look for common patterns like
+    'Chapter 1', 'Chapter One', 'Prologue', 'Epilogue', roman numerals, etc.
+    Falls back to splitting into ~3000-word blocks if no clear pattern is found.
     """
     pattern = re.compile(
         r"(?:^|\n)\s*((?:Chapter|CHAPTER|Prologue|PROLOGUE|Epilogue|EPILOGUE)\b[^\n]{0,60})\n",
@@ -153,7 +153,7 @@ def split_into_chapters(text: str) -> list[str]:
             chapters.append(text[start:end].strip())
         return [c for c in chapters if len(c) >= MIN_CHAPTER_CHARS]
 
-    # Fallback: tidak ada penanda bab yang jelas -> potong per blok kata
+    # Fallback: no clear chapter markers -> split into word blocks
     words = text.split()
     chunk_size = 3000
     chunks = [
@@ -189,7 +189,7 @@ def extract_pdf(path: Path) -> list[str]:
 
 def main():
     if not INPUT_DIR.exists() or not any(INPUT_DIR.iterdir()):
-        print(f"Tidak ada file di {INPUT_DIR}/. Taruh file .epub atau .pdf di sana dulu.")
+        print(f"No files found in {INPUT_DIR}/. Put your .epub or .pdf files there first.")
         sys.exit(1)
 
     OUTPUT_DIR.mkdir(exist_ok=True)
@@ -201,11 +201,11 @@ def main():
     )
 
     if not source_files:
-        print("Tidak ditemukan file .epub/.pdf di folder input/.")
+        print("No .epub/.pdf files found in the input/ folder.")
         sys.exit(1)
 
     for src in source_files:
-        print(f"Memproses {src.name} ...")
+        print(f"Processing {src.name} ...")
         if src.suffix.lower() == ".epub":
             chapters = extract_epub(src)
         else:
@@ -227,9 +227,9 @@ def main():
     with open(OUTPUT_DIR / "manifest.json", "w", encoding="utf-8") as f:
         json.dump(manifest, f, indent=2, ensure_ascii=False)
 
-    print(f"\nSelesai. {len(manifest)} bab diekstrak ke {OUTPUT_DIR}/")
-    print("Cek beberapa file .txt secara manual untuk memastikan hasil ekstraksi bersih")
-    print("(terutama untuk PDF, karena header/footer/nomor halaman kadang ikut terekstrak).")
+    print(f"\nDone. {len(manifest)} chapters extracted to {OUTPUT_DIR}/")
+    print("Spot-check a few .txt files manually to confirm the extraction is clean")
+    print("(especially for PDFs, since headers/footers/page numbers sometimes slip through).")
 
 
 if __name__ == "__main__":

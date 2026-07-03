@@ -1,19 +1,19 @@
 """
 build_dataset.py
 
-Tahap 5: Gabungkan system prompt + pasangan dialog mentah (dari novel) +
-pasangan sintetis (opsional) menjadi satu file JSONL final, format standar
-fine-tuning chat (field "messages" dengan role system/user/assistant).
+Stage 5: Combine the system prompt + raw dialogue pairs (from the novel) +
+synthetic pairs (optional) into one final JSONL file, in the standard
+chat fine-tuning format ("messages" field with system/user/assistant roles).
 
-Jalankan PALING TERAKHIR, setelah:
+Run LAST, after:
     1. extract_text.py
     2. persona_extractor.py
     3. dialogue_extractor.py
-    4. augment_synthetic.py   (opsional)
+    4. augment_synthetic.py   (optional)
 
     python build_dataset.py
 
-Hasil:
+Output:
     output/elaina_finetune_dataset.jsonl
 """
 
@@ -47,15 +47,15 @@ def load_jsonl(path: Path):
 
 def main():
     if not SYSTEM_PROMPT_FILE.exists():
-        raise SystemExit("output/elaina_system_prompt.txt tidak ditemukan. Jalankan persona_extractor.py dulu.")
+        raise SystemExit("output/elaina_system_prompt.txt not found. Run persona_extractor.py first.")
 
     system_prompt = SYSTEM_PROMPT_FILE.read_text(encoding="utf-8").strip()
 
     raw_pairs = load_jsonl(RAW_DIALOGUE_FILE)
     synthetic_pairs = load_jsonl(SYNTHETIC_FILE)
 
-    print(f"Pasangan dari novel: {len(raw_pairs)}")
-    print(f"Pasangan sintetis  : {len(synthetic_pairs)}")
+    print(f"Pairs from the novel: {len(raw_pairs)}")
+    print(f"Synthetic pairs     : {len(synthetic_pairs)}")
 
     seen_responses = set()
     final_records = []
@@ -67,7 +67,7 @@ def main():
         if len(response) < MIN_RESPONSE_CHARS or not user_msg:
             continue
 
-        # dedup sederhana berdasarkan respons (case-insensitive)
+        # simple dedup based on the response (case-insensitive)
         dedup_key = response.lower()
         if dedup_key in seen_responses:
             continue
@@ -87,11 +87,11 @@ def main():
         for rec in final_records:
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
 
-    print(f"\nSelesai. {len(final_records)} contoh fine-tuning final tersimpan di {FINAL_FILE}")
+    print(f"\nDone. {len(final_records)} final fine-tuning example(s) saved to {FINAL_FILE}")
     if len(final_records) < 100:
-        print("Catatan: jumlah contoh masih sedikit untuk fine-tuning yang stabil.")
-        print("Pertimbangkan menambah jumlah batch di augment_synthetic.py, atau cek apakah")
-        print("dialogue_extractor.py melewatkan banyak chunk (lihat pesan [WARN] saat run).")
+        print("Note: this is still a small number of examples for stable fine-tuning.")
+        print("Consider increasing the batch count in augment_synthetic.py, or check whether")
+        print("dialogue_extractor.py skipped a lot of chunks (see [WARN] messages during the run).")
 
 
 if __name__ == "__main__":

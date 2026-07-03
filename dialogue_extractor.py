@@ -1,15 +1,15 @@
 """
 dialogue_extractor.py
 
-Tahap 3: Baca tiap bab, cari adegan di mana Elaina berbicara, lalu ubah
-jadi pasangan percakapan mentah: konteks/pertanyaan -> respons Elaina.
+Stage 3: Read each chapter, find scenes where Elaina speaks, and turn
+them into raw conversation pairs: context/question -> Elaina's response.
 
-Jalankan setelah persona_extractor.py:
+Run after persona_extractor.py:
     python dialogue_extractor.py
 
-Hasil:
+Output:
     output/raw_dialogue_pairs.jsonl
-    Tiap baris: {"chapter": "...", "scenario": "...", "user_message": "...", "elaina_response": "..."}
+    Each line: {"chapter": "...", "scenario": "...", "user_message": "...", "elaina_response": "..."}
 """
 
 import json
@@ -24,15 +24,15 @@ TEXT_DIR = Path("text")
 OUTPUT_DIR = Path("output")
 OUTPUT_FILE = OUTPUT_DIR / "raw_dialogue_pairs.jsonl"
 
-# Naikkan kalau model kamu punya context window besar (mis. 128k via NVIDIA
-# Build) -> konteks adegan lebih utuh & lebih sedikit panggilan API.
-# Untuk model 40k seperti Hermes-4-14B, nilai default ini aman (sisa ruang
-# besar untuk system prompt + output JSON).
+# Increase this if your model has a large context window (e.g. 128k via
+# NVIDIA Build) -> fuller scene context & fewer API calls. For a 40k model
+# like Hermes-4-14B, this default is safe (leaves plenty of room for the
+# system prompt + JSON output).
 DIALOGUE_CHUNK_CHARS = int(os.environ.get("DIALOGUE_CHUNK_CHARS", "4000"))
 
-# Checkpoint: daftar nama bab yang SUDAH SELESAI diproses (semua chunk-nya).
-# Kalau script terhenti di tengah jalan, rerun berikutnya melanjutkan dari
-# bab yang belum selesai -- tanpa duplikasi baris di raw_dialogue_pairs.jsonl.
+# Checkpoint: list of chapter names that are FULLY done (all their chunks
+# processed). If the script stops mid-run, the next run resumes from the
+# unfinished chapters -- without duplicating lines in raw_dialogue_pairs.jsonl.
 CHECKPOINT_FILE = OUTPUT_DIR / "dialogue_checkpoint.json"
 
 
@@ -43,7 +43,7 @@ def load_checkpoint() -> set:
         data = json.loads(CHECKPOINT_FILE.read_text(encoding="utf-8"))
         return set(data.get("completed_chapters", []))
     except json.JSONDecodeError:
-        print("[WARN] Checkpoint rusak/tidak terbaca, mulai dari awal.")
+        print("[WARN] Checkpoint is corrupted/unreadable, starting from scratch.")
         return set()
 
 
@@ -54,31 +54,31 @@ def save_checkpoint(completed_chapters: set):
         encoding="utf-8",
     )
 
-SYSTEM_PROMPT = """Kamu membantu menyiapkan data fine-tuning chatbot untuk tokoh Elaina, \
-dari novel "Majo no Tabitabi / The Journey of Elaina".
+SYSTEM_PROMPT = """You are helping prepare chatbot fine-tuning data for the character Elaina, \
+from the novel "Majo no Tabitabi / The Journey of Elaina".
 
-Dari cuplikan bab yang diberikan, cari SEMUA adegan di mana Elaina berbicara \
-(baik dialog langsung maupun monolog batin yang menunjukkan kepribadiannya). \
-Untuk tiap adegan, hasilkan satu entri dengan struktur:
+From the given chapter excerpt, find ALL scenes where Elaina speaks (either \
+direct dialogue or inner monologue that reveals her personality). For each \
+scene, produce one entry with the structure:
 
 {
-  "scenario": "ringkasan singkat (1-2 kalimat) situasi/latar adegan ini",
-  "user_message": "pesan/pertanyaan dari lawan bicara Elaina (atau narasi situasi jika tidak ada lawan bicara langsung) yang memicu respons Elaina, ditulis ulang dalam bahasa Inggris natural",
-  "elaina_response": "respons Elaina dalam bahasa Inggris, pertahankan kepribadian, nada, dan gaya bicaranya seakurat mungkin"
+  "scenario": "a brief summary (1-2 sentences) of this scene's situation/setting",
+  "user_message": "the message/question from Elaina's conversation partner (or a narration of the situation if there's no direct interlocutor) that prompts Elaina's response, rewritten in natural English",
+  "elaina_response": "Elaina's response in English, preserving her personality, tone, and speech style as accurately as possible"
 }
 
-Balas dengan JSON array berisi entri-entri tersebut. Kalau tidak ada adegan Elaina \
-berbicara di cuplikan ini, balas dengan array kosong []. JANGAN menyertakan adegan \
-yang tidak melibatkan Elaina berbicara/bereaksi.
+Reply with a JSON array containing these entries. If there are no scenes of \
+Elaina speaking in this excerpt, reply with an empty array []. DO NOT include \
+scenes that don't involve Elaina speaking/reacting.
 
-Balas HANYA dengan JSON array, tanpa teks lain, tanpa markdown code fence.
+Reply with ONLY a JSON array, no other text, no markdown code fence.
 """
 
 
 def main():
     chapter_files = sorted(TEXT_DIR.glob("chapter_*.txt"))
     if not chapter_files:
-        raise SystemExit("Tidak ada file bab di text/. Jalankan extract_text.py dulu.")
+        raise SystemExit("No chapter files found in text/. Run extract_text.py first.")
 
     OUTPUT_DIR.mkdir(exist_ok=True)
     completed = load_checkpoint()
@@ -88,10 +88,11 @@ def main():
         stale = completed - chapter_names
         if stale:
             print(
-                f"[WARN] Checkpoint menyebut {len(stale)} bab yang tidak lagi ada di "
-                f"text/ (mungkin daftar bab berubah). Memproses ULANG SEMUA bab dari "
-                f"awal supaya konsisten. Hapus output/dialogue_checkpoint.json dan "
-                f"output/raw_dialogue_pairs.jsonl dulu kalau ini tidak diinginkan."
+                f"[WARN] Checkpoint references {len(stale)} chapter(s) that no longer "
+                f"exist in text/ (the chapter list may have changed). Reprocessing ALL "
+                f"chapters from scratch for consistency. Delete "
+                f"output/dialogue_checkpoint.json and output/raw_dialogue_pairs.jsonl "
+                f"first if this isn't what you want."
             )
             completed = set()
 
@@ -99,34 +100,35 @@ def main():
 
     if completed:
         print(
-            f"[INFO] Melanjutkan dari checkpoint: {len(completed)} bab sudah "
-            f"selesai sebelumnya, sisa {len(remaining)} bab."
+            f"[INFO] Resuming from checkpoint: {len(completed)} chapter(s) already "
+            f"completed previously, {len(remaining)} remaining."
         )
     if not remaining:
-        print("[INFO] Semua bab sudah selesai diproses (sesuai checkpoint).")
+        print("[INFO] All chapters already processed (per checkpoint).")
         return
 
-    # Append kalau melanjutkan dari checkpoint (baris lama dipertahankan),
-    # overwrite kalau ini run pertama dari awal.
+    # Append if resuming from a checkpoint (keep old lines), overwrite if
+    # this is a fresh first run.
     file_mode = "a" if completed else "w"
     total_pairs = 0
 
     with open(OUTPUT_FILE, file_mode, encoding="utf-8") as out_f:
-        for chap_path in tqdm(remaining, desc="Ekstraksi dialog Elaina"):
+        for chap_path in tqdm(remaining, desc="Extracting Elaina's dialogue"):
             chapter_text = chap_path.read_text(encoding="utf-8")
 
-            # proses per potongan supaya aman utk context window model yang dipakai
+            # process in chunks to stay within the context window of whichever model is used
             chunk_size = DIALOGUE_CHUNK_CHARS
             chunks = [
                 chapter_text[i : i + chunk_size]
                 for i in range(0, len(chapter_text), chunk_size)
             ]
 
-            # Kumpulkan hasil satu bab dulu di memori, baru ditulis ke file
-            # SETELAH semua chunk bab ini selesai. Ini penting supaya kalau
-            # bab ini gagal di tengah (mis. rate limit harian), tidak ada
-            # baris setengah-jadi yang tertulis -- bab ini akan diulang UTUH
-            # saat resume, tanpa risiko duplikasi.
+            # Buffer this chapter's results in memory first, and only write
+            # to the file AFTER all of this chapter's chunks are done. This
+            # matters because if this chapter fails partway (e.g. a daily
+            # rate limit), no half-finished lines get written -- this
+            # chapter will be retried in FULL on resume, with no risk of
+            # duplicates.
             chapter_records = []
 
             for chunk in chunks:
@@ -135,7 +137,7 @@ def main():
                 try:
                     pairs = chat_json(SYSTEM_PROMPT, chunk)
                 except ValueError as e:
-                    print(f"[WARN] Lewati potongan di {chap_path.name}: {e}")
+                    print(f"[WARN] Skipping a chunk in {chap_path.name}: {e}")
                     continue
 
                 if not isinstance(pairs, list):
@@ -167,8 +169,8 @@ def main():
             completed.add(chap_path.name)
             save_checkpoint(completed)
 
-    print(f"\nSelesai. {total_pairs} pasangan dialog BARU ditambahkan ke {OUTPUT_FILE}")
-    print(f"Total bab selesai: {len(completed)}/{len(chapter_files)}")
+    print(f"\nDone. {total_pairs} NEW dialogue pair(s) added to {OUTPUT_FILE}")
+    print(f"Total chapters completed: {len(completed)}/{len(chapter_files)}")
 
 
 if __name__ == "__main__":

@@ -1,16 +1,16 @@
 """
 augment_synthetic.py
 
-Tahap 4 (opsional tapi disarankan): hasilkan pasangan tanya-jawab TAMBAHAN
-yang orisinal (bukan kutipan dari novel), berdasarkan profil Elaina yang
-sudah dibangun. Ini membantu model generalisasi (menjawab pertanyaan yang
-TIDAK ada persis di novel) dan mengurangi ketergantungan pada teks asli
-secara verbatim.
+Stage 4 (optional but recommended): generate ADDITIONAL, original
+question-answer pairs (not quoted from the novel), based on the Elaina
+profile already built. This helps the model generalize (answer questions
+that AREN'T verbatim in the novel) and reduces reliance on verbatim
+original text.
 
-Jalankan setelah persona_extractor.py:
-    python augment_synthetic.py [jumlah_batch]
+Run after persona_extractor.py:
+    python augment_synthetic.py [batch_count]
 
-Hasil:
+Output:
     output/synthetic_pairs.jsonl
 """
 
@@ -28,23 +28,23 @@ OUTPUT_FILE = OUTPUT_DIR / "synthetic_pairs.jsonl"
 
 PAIRS_PER_BATCH = 8
 
-SYSTEM_PROMPT = """Kamu membantu menyiapkan data fine-tuning chatbot untuk tokoh Elaina \
-dari novel "Majo no Tabitabi / The Journey of Elaina", berdasarkan character bible \
-yang diberikan.
+SYSTEM_PROMPT = """You are helping prepare chatbot fine-tuning data for the character Elaina \
+from the novel "Majo no Tabitabi / The Journey of Elaina", based on the character \
+bible provided below.
 
-Buat {n} pasangan tanya-jawab BARU dan ORISINAL (bukan kutipan/adegan persis dari \
-novel) yang menguji apakah seseorang bisa berperan sebagai Elaina dengan konsisten. \
-Variasikan jenis pertanyaan: tentang masa lalunya, pendapatnya soal sesuatu, \
-reaksinya terhadap situasi hipotetis baru, hal-hal kecil sehari-hari, dst. \
-Jawaban HARUS konsisten dengan kepribadian, nilai, gaya bicara, dan ingatan di \
-character bible berikut:
+Create {n} NEW and ORIGINAL question-answer pairs (not quotes/scenes taken \
+directly from the novel) that test whether someone can consistently roleplay \
+as Elaina. Vary the type of question: about her past, her opinion on \
+something, her reaction to a new hypothetical situation, small everyday \
+things, etc. Answers MUST be consistent with the personality, values, \
+speech style, and memories in the following character bible:
 
 {profile}
 
-Format setiap entri:
-{{"user_message": "pertanyaan/situasi dalam bahasa Inggris", "elaina_response": "jawaban Elaina dalam bahasa Inggris, sesuai gaya bicaranya"}}
+Format for each entry:
+{{"user_message": "a question/situation in English", "elaina_response": "Elaina's answer in English, matching her speech style"}}
 
-Balas dengan JSON array berisi {n} entri tersebut. HANYA JSON, tanpa teks lain.
+Reply with a JSON array containing {n} such entries. ONLY JSON, no other text.
 """
 
 
@@ -52,19 +52,19 @@ def main():
     n_batches = int(sys.argv[1]) if len(sys.argv) > 1 else 10
 
     if not PROFILE_FILE.exists():
-        raise SystemExit("output/elaina_profile.json tidak ditemukan. Jalankan persona_extractor.py dulu.")
+        raise SystemExit("output/elaina_profile.json not found. Run persona_extractor.py first.")
 
     profile = json.loads(PROFILE_FILE.read_text(encoding="utf-8"))
     profile_str = json.dumps(profile, ensure_ascii=False)
 
     total = 0
     with open(OUTPUT_FILE, "w", encoding="utf-8") as out_f:
-        for _ in tqdm(range(n_batches), desc="Membuat Q&A sintetis"):
+        for _ in tqdm(range(n_batches), desc="Generating synthetic Q&A"):
             prompt = SYSTEM_PROMPT.format(n=PAIRS_PER_BATCH, profile=profile_str)
             try:
-                pairs = chat_json(prompt, "Hasilkan batch berikutnya, hindari duplikasi tema dari batch sebelumnya.", temperature=0.8)
+                pairs = chat_json(prompt, "Generate the next batch, avoid repeating themes from previous batches.", temperature=0.8)
             except ValueError as e:
-                print(f"[WARN] Lewati satu batch: {e}")
+                print(f"[WARN] Skipping a batch: {e}")
                 continue
 
             if not isinstance(pairs, list):
@@ -78,7 +78,7 @@ def main():
                 out_f.write(json.dumps(pair, ensure_ascii=False) + "\n")
                 total += 1
 
-    print(f"\nSelesai. {total} pasangan sintetis tersimpan di {OUTPUT_FILE}")
+    print(f"\nDone. {total} synthetic pair(s) saved to {OUTPUT_FILE}")
 
 
 if __name__ == "__main__":

@@ -1,90 +1,90 @@
 # Elaina Dataset Tool
 
-Pipeline untuk mengubah novel *Majo no Tabitabi / The Journey of Elaina*
-(format EPUB/PDF milikmu sendiri) menjadi dataset fine-tuning chatbot
-berformat JSONL, berisi kepribadian, gaya bicara, dan ingatan Elaina.
+A pipeline that turns the novel *Majo no Tabitabi / The Journey of
+Elaina* (your own EPUB/PDF copy) into a JSONL chatbot fine-tuning
+dataset, capturing Elaina's personality, speech style, and memories.
 
-Pipeline ini mendukung provider LLM mana pun yang OpenAI-compatible.
-Lihat `.env.example` untuk 5 opsi yang sudah dikonfigurasi siap pakai.
-**Rekomendasi**: Claude Sonnet (via Anthropic API + LiteLLM atau OpenRouter)
-untuk kualitas ekstraksi terbaik.
+This pipeline works with any OpenAI-compatible LLM provider. See
+`.env.example` for 5 ready-to-use configurations. **Recommended**:
+Claude Sonnet (via the Anthropic API + LiteLLM or OpenRouter) for the
+best extraction quality.
 
-## Instalasi
+## Installation
 
 ```bash
 pip install -r requirements.txt
 cp .env.example .env
-# Buka .env, pilih SATU blok provider, hapus tanda # di baris-barisnya,
-# lalu isi key dan URL yang sesuai.
-export $(grep -v '^#' .env | xargs)   # load env vars (skip baris komentar)
+# Open .env, pick ONE provider block, uncomment its lines,
+# and fill in the matching key and URL.
+export $(grep -v '^#' .env | xargs)   # load env vars (skip comment lines)
 ```
 
-Test koneksi ke provider sebelum mulai pipeline:
+Test the connection to your provider before starting the pipeline:
 ```bash
 curl $LLM_BASE_URL/models -H "Authorization: Bearer $LLM_API_KEY"
-# Harus mengembalikan list model, bukan error 401/403/connection refused
+# Should return a list of models, not a 401/403/connection-refused error
 ```
 
-## Setup LiteLLM + Claude (Opsi 1 — Terbaik)
+## Setting up LiteLLM + Claude (Option 1 — Best)
 
-Kalau kamu sudah punya LiteLLM jalan di Colab via Cloudflare Tunnel dan
-ingin tambahkan Claude, edit `config.yaml` LiteLLM kamu:
+If you already have LiteLLM running in Colab via a Cloudflare Tunnel and
+want to add Claude, edit your LiteLLM `config.yaml`:
 
 ```yaml
 model_list:
-  - model_name: claude-sonnet          # nama alias bebas
+  - model_name: claude-sonnet          # any alias you like
     litellm_params:
       model: anthropic/claude-sonnet-4-6
       api_key: os.environ/ANTHROPIC_API_KEY
 
-  - model_name: hermes-4-14b           # model lokal tetap ada
+  - model_name: hermes-4-14b           # your local model stays available too
     litellm_params:
       model: ollama/hermes-4-14b-abliterated
       api_base: http://localhost:11434
 ```
 
-Lalu di Colab, set env var **sebelum** menjalankan LiteLLM:
+Then in Colab, set the env var **before** starting LiteLLM:
 ```bash
 export ANTHROPIC_API_KEY="sk-ant-api03-..."
 litellm --config config.yaml
 ```
 
-API key Anthropic: daftar di `console.anthropic.com` → menu *API Keys*.
+Anthropic API key: sign up at `console.anthropic.com` → *API Keys* menu.
 
-## Struktur folder
+## Folder structure
 
 ```
 elaina-dataset-tool/
-  input/      <- taruh file .epub / .pdf novel di sini
-  text/       <- (auto) hasil ekstraksi teks per-bab
-  output/     <- (auto) semua hasil akhir & intermediate
+  input/      <- put your novel .epub / .pdf files here
+  text/       <- (auto) per-chapter extracted text
+  output/     <- (auto) all final & intermediate results
 ```
 
-## Cara pakai
+## How to use it
 
-1. Taruh file EPUB/PDF novel kamu di folder `input/`. Beri nama urut
-   (mis. `01_vol1.epub`, `02_vol2.epub`) supaya urutan ceritanya benar —
-   ini penting karena ingatan Elaina dibangun secara kronologis.
+1. Put your novel's EPUB/PDF files in the `input/` folder. Name them so
+   they sort in order (e.g. `01_vol1.epub`, `02_vol2.epub`) -- this
+   matters because Elaina's memory profile is built chronologically.
 
-2. Jalankan seluruh pipeline sekaligus:
+2. Run the whole pipeline at once:
 
    ```bash
    python run_all.py
    ```
 
-   Atau jalankan tahap per tahap (berguna untuk debug / cek hasil tiap
-   tahap sebelum lanjut):
+   Or run each stage individually (useful for debugging / checking
+   results between stages):
 
    ```bash
-   python extract_text.py        # 1. EPUB/PDF -> teks bersih per bab
-   python persona_extractor.py   # 2. bangun profil kepribadian & ingatan
-   python dialogue_extractor.py  # 3. ekstrak pasangan dialog dari novel
-   python augment_synthetic.py 10  # 4. (opsional) tambah Q&A sintetis orisinal
-   python build_dataset.py       # 5. gabungkan jadi JSONL final
-   python validate_dataset.py    # cek kualitas & struktur hasil akhir
+   python extract_text.py        # 1. EPUB/PDF -> clean per-chapter text
+   python persona_extractor.py   # 2. build the personality & memory profile
+   python dialogue_extractor.py  # 3. extract dialogue pairs from the novel
+   python augment_synthetic.py 10  # 4. (optional) add original synthetic Q&A
+   python build_dataset.py       # 5. assemble the final JSONL
+   python validate_dataset.py    # check the final output's quality & structure
    ```
 
-3. Hasil akhir: `output/elaina_finetune_dataset.jsonl`, format:
+3. Final output: `output/elaina_finetune_dataset.jsonl`, format:
 
    ```json
    {"messages": [
@@ -94,130 +94,140 @@ elaina-dataset-tool/
    ]}
    ```
 
-   Format ini langsung kompatibel dengan kebanyakan framework fine-tuning
-   chat (Axolotl, LLaMA-Factory, OpenAI fine-tuning format, dst).
+   This format is directly compatible with most chat fine-tuning
+   frameworks (Axolotl, LLaMA-Factory, the OpenAI fine-tuning format, etc.).
 
-## Kenapa prosesnya bertahap?
+## Why is this staged?
 
-- **persona_extractor.py** jalan duluan supaya ada satu "character bible"
-  (`output/elaina_profile.json` + `output/elaina_system_prompt.txt`) yang
-  konsisten dipakai sebagai system prompt di semua contoh.
-- **dialogue_extractor.py** mengambil adegan asli dari novel — ini yang
-  membuat respons Elaina terasa otentik sesuai sumber.
-- **augment_synthetic.py** sengaja dipisah karena isinya BUKAN kutipan
-  novel, melainkan Q&A baru yang dibuat model berdasarkan profil. Ini
-  membantu Elaina-bot menjawab pertanyaan yang tidak persis ada di novel,
-  dan mengurangi dataset yang isinya cuma menyalin ulang teks asli.
+- **persona_extractor.py** runs first so there's a single "character
+  bible" (`output/elaina_profile.json` + `output/elaina_system_prompt.txt`)
+  that's used consistently as the system prompt across every example.
+- **dialogue_extractor.py** pulls genuine scenes from the novel -- this
+  is what makes Elaina's responses feel authentic to the source.
+- **augment_synthetic.py** is deliberately separate because its content
+  is NOT quoted from the novel -- it's new Q&A the model generates based
+  on the profile. This helps the Elaina bot answer questions that aren't
+  exactly in the novel, and reduces a dataset that's just verbatim
+  copies of the original text.
 
-## Memilih provider & model
+## Choosing a provider & model
 
-Tool ini bicara ke model lewat satu wrapper OpenAI-compatible
-(`llm_client.py`), jadi providernya bisa ditukar tanpa ubah kode -- cukup
-ganti 3 variabel di `.env`: `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL`.
-Lihat `.env.example` untuk dua opsi siap pakai:
+This tool talks to models through a single OpenAI-compatible wrapper
+(`llm_client.py`), so the provider can be swapped without changing any
+code -- just change 3 variables in `.env`: `LLM_BASE_URL`, `LLM_API_KEY`,
+`LLM_MODEL`. See `.env.example` for ready-made options:
 
-- **LiteLLM kamu sendiri** (Ollama + Hermes-4-14B abliterated via
-  Cloudflare Tunnel) -- privat, tapi context window terbatas (~40k token)
-  dan kecepatan tergantung GPU Colab kamu.
-- **NVIDIA Build / NIM** (https://build.nvidia.com) -- gratis, tanpa
-  kartu kredit, endpoint OpenAI-compatible, banyak model open-weight
-  dengan context window jauh lebih besar (umumnya 128k). Cocok khusus
-  untuk tahap ekstraksi dataset ini karena bukan dipakai untuk chat
-  interaktif, jadi rate limit ~40 req/menit di free tier-nya tidak
-  masalah. Bisa pakai untuk seluruh pipeline, atau kombinasikan: NVIDIA
-  Build untuk `persona_extractor.py`/`dialogue_extractor.py` (butuh
-  konteks besar & JSON konsisten), lalu balik ke Hermes lokal kamu untuk
-  keperluan lain.
+- **Your own LiteLLM** (Ollama + Hermes-4-14B abliterated via Cloudflare
+  Tunnel) -- private, but limited context window (~40k tokens) and speed
+  depends on your Colab GPU.
+- **NVIDIA Build / NIM** (https://build.nvidia.com) -- free, no credit
+  card, OpenAI-compatible endpoint, many open-weight models with a much
+  larger context window (typically 128k). Especially well-suited for
+  this dataset-extraction stage since it's not used for interactive
+  chat, so the free tier's ~40 req/minute rate limit isn't an issue. You
+  can use it for the whole pipeline, or mix and match: NVIDIA Build for
+  `persona_extractor.py`/`dialogue_extractor.py` (which need large
+  context & consistent JSON), then switch back to your local Hermes for
+  other needs.
 
-  Model yang cocok untuk tugas ekstraksi terstruktur seperti ini
-  (instruction-following kuat + context besar + JSON konsisten):
-  `meta/llama-3.3-70b-instruct`, `qwen/qwen2.5-72b-instruct`, atau
-  `mistralai/mistral-large`. Hindari model "reasoning" yang membungkus
-  jawaban dengan teks `<think>...</think>` (mis. beberapa varian
-  DeepSeek-R1) kecuali kamu menambah logika untuk membuang bagian itu
-  sebelum parsing JSON.
+  Models well-suited to this kind of structured extraction task (strong
+  instruction-following + large context + consistent JSON):
+  `meta/llama-3.3-70b-instruct`, `qwen/qwen2.5-72b-instruct`, or
+  `mistralai/mistral-large`. Avoid "reasoning" models that wrap answers
+  in `<think>...</think>` text (e.g. some DeepSeek-R1 variants) unless
+  you add logic to strip that part before JSON parsing.
 
-  Catatan: free tier NVIDIA Build untuk prototyping/personal use, bukan
-  untuk traffic produksi -- pas untuk membangun dataset ini.
+  Note: NVIDIA Build's free tier is meant for prototyping/personal use,
+  not production traffic -- a good fit for building this dataset.
 
-## Mengatur ukuran chunk vs context window
+## Tuning chunk size vs. context window
 
-Tiap panggilan ke model berisi: system prompt (~500-800 token) + potongan
-teks bab + (khusus persona_extractor) profil yang sudah terkumpul +
-ruang untuk output JSON. Aturan kasar: total input sebaiknya tidak lebih
-dari ~60-70% context window model, sisanya untuk output.
+Each call to the model contains: the system prompt (~500-800 tokens) +
+a chunk of chapter text + (for persona_extractor specifically) the
+accumulated profile so far + room for the JSON output. Rule of thumb:
+total input should stay under ~60-70% of the model's context window,
+leaving the rest for output.
 
-| Context window model | PERSONA_CHUNK_CHARS | DIALOGUE_CHUNK_CHARS |
+| Model context window | PERSONA_CHUNK_CHARS | DIALOGUE_CHUNK_CHARS |
 |---|---|---|
-| ~40k (Hermes-4-14B lokal) | 6000 (default) | 4000 (default) |
+| ~40k (local Hermes-4-14B) | 6000 (default) | 4000 (default) |
 | ~128k (Llama-3.3-70B, Qwen2.5-72B via NVIDIA Build) | 30000-40000 | 20000-25000 |
 
-Naikkan nilainya di `.env` kalau pakai model context besar -- hasilnya:
-lebih sedikit panggilan API, dan model dapat konteks adegan/bab yang
-lebih utuh (kualitas ekstraksi biasanya lebih baik). Untuk novel 350+
-halaman, ini juga jauh mengurangi jumlah total panggilan dibanding tetap
-pakai chunk kecil.
+Increase these values in `.env` if you're using a large-context model --
+this results in fewer API calls, and the model gets fuller scene/chapter
+context (extraction quality is usually better). For a 350+ page novel,
+this also significantly reduces the total number of calls compared to
+sticking with small chunks.
 
-`persona_extractor.py` juga otomatis memadatkan (`compress_profile`)
-profil Elaina begitu ukurannya melewati `MAX_PROFILE_CHARS`, supaya
-profil yang terus terakumulasi dari bab ke bab tidak membengkak dan
-menghabiskan context window di novel yang banyak babnya.
+`persona_extractor.py` also automatically compresses (`compress_profile`)
+Elaina's profile once it crosses `MAX_PROFILE_CHARS`, so the profile
+that keeps accumulating chapter by chapter doesn't balloon and eat up
+the context window on novels with many chapters.
 
-## Kalau script berhenti karena rate limit / error
+## If the script stops due to a rate limit / error
 
-Sejak update terbaru, `persona_extractor.py` dan `dialogue_extractor.py`
-otomatis menyimpan checkpoint (`output/persona_checkpoint.json` dan
-`output/dialogue_checkpoint.json`) setelah setiap bab selesai diproses.
+As of the latest update, `persona_extractor.py` and
+`dialogue_extractor.py` automatically save a checkpoint
+(`output/persona_checkpoint.json` and `output/dialogue_checkpoint.json`)
+after every chapter is processed.
 
-- **Rate limit SINGKAT** (mis. limit per-menit) → script otomatis
-  menunggu lalu lanjut sendiri, tidak perlu tindakan apapun.
-- **Rate limit PANJANG** (mis. limit token harian seperti Groq free tier
-  yang cuma 100.000 token/hari) → script akan BERHENTI dengan pesan jelas
-  berapa lama harus menunggu. Progress kamu **aman**, tidak hilang.
-  Tunggu sampai waktu yang disebutkan (atau besok kalau itu limit harian),
-  lalu jalankan ulang perintah yang sama persis:
+- **SHORT rate limit** (e.g. a per-minute limit) → the script
+  automatically waits and continues on its own, no action needed.
+- **LONG rate limit** (e.g. a daily token limit like Groq's free tier,
+  which is only 100,000 tokens/day) → the script will STOP with a clear
+  message about how long to wait. Your progress is **safe**, nothing is
+  lost. Wait until the stated time (or the next day, if it's a daily
+  limit), then re-run the exact same command:
 
   ```bash
-  python persona_extractor.py     # atau python run_all.py
+  python persona_extractor.py     # or python run_all.py
   ```
 
-  Script akan melanjutkan dari bab terakhir yang berhasil, bukan mengulang
-  dari bab 1.
+  The script will resume from the last successfully completed chapter,
+  not restart from chapter 1.
 
-**Catatan realistis soal kuota Groq gratis**: limit 100.000 token/hari
-untuk `llama-3.3-70b-versatile` cukup kecil untuk novel panjang — dari
-pengalaman, ~14 bab profil ekstraksi saja bisa menghabiskan kuota harian.
-Untuk novel 80+ bab, kemungkinan besar kamu butuh beberapa hari berturut
-(checkpoint akan menangani ini dengan aman), ATAU pertimbangkan pindah ke
-Claude (via OpenRouter/LiteLLM) untuk proses yang jauh lebih cepat selesai
-tanpa terputus-putus oleh limit harian.
+**Tokens-per-minute (TPM) limits**: some providers (Groq in particular)
+also cap total tokens *per minute*, separately from the daily cap. If
+you hit this, set `LLM_TPM_LIMIT` in `.env` (see the Groq block in
+`.env.example`) -- the client will then proactively pace requests to
+stay under that budget using a sliding 60-second window, instead of
+firing requests and reacting to 429s after the fact. This is on by
+default in the Groq config block, set a bit below the real limit as a
+safety margin.
 
-**Kalau menambah volume baru** dan checkpoint lama sudah ada, hapus dulu
-kedua file checkpoint sebelum rerun (supaya seluruh pipeline diproses
-ulang secara kronologis dan konsisten dari awal, sesuai penjelasan di
-bagian "Cara pakai" di atas):
+**A realistic note about Groq's free quota**: the 100,000 tokens/day
+limit for `llama-3.3-70b-versatile` is fairly small for a long novel --
+in practice, just ~14 chapters of profile extraction can exhaust the
+daily quota. For an 80+ chapter novel, you'll likely need several
+consecutive days (the checkpoint handles this safely), OR consider
+switching to Claude (via OpenRouter/LiteLLM) to finish much faster
+without being repeatedly interrupted by daily limits.
+
+**If you add a new volume** and old checkpoints already exist, delete
+both checkpoint files before rerunning (so the whole pipeline is
+reprocessed chronologically and consistently from the start, as
+explained in the "How to use it" section above):
 
 ```bash
 rm -f output/persona_checkpoint.json output/dialogue_checkpoint.json
 rm -f output/raw_dialogue_pairs.jsonl output/elaina_profile.json
 ```
 
-## Tuning kualitas
+## Improving quality
 
-- Kalau hasil ekstraksi bab dari PDF berantakan (header/footer ikut
-  kebawa, kata terpotong aneh), cek dulu file di `text/` sebelum lanjut
-  ke tahap berikutnya — EPUB biasanya jauh lebih bersih daripada PDF.
-- Kalau banyak `[WARN] Gagal mendapatkan JSON valid`, kemungkinan model
-  butuh prompt lebih ketat atau temperature lebih rendah. Coba turunkan
-  `temperature` di `llm_client.chat_json` call masing-masing script.
-- Jalankan `validate_dataset.py` setiap kali habis `build_dataset.py` —
-  ini juga menampilkan 3 contoh acak biar kamu bisa spot-check kualitas.
+- If a PDF's extracted chapters look messy (headers/footers leaking
+  in, oddly broken words), check the files in `text/` before moving on
+  to the next stage -- EPUB is usually much cleaner than PDF.
+- If you see a lot of `[WARN] Failed to get valid JSON`, the model
+  probably needs a stricter prompt or a lower temperature. Try lowering
+  `temperature` in the `llm_client.chat_json` calls in each script.
+- Run `validate_dataset.py` every time after `build_dataset.py` -- it
+  also prints 3 random examples so you can spot-check quality.
 
-## Catatan penggunaan
+## Usage notes
 
-Dataset ini dibangun dari materi berhak cipta (novel *Majo no Tabitabi*
-karya Jougi Shiraishi). Pipeline ini ditujukan untuk pemakaian
-pribadi/riset di mesin kamu sendiri menggunakan salinan novel yang kamu
-miliki. Kalau berencana membagikan model hasil fine-tuning atau dataset
-ini secara publik/komersial, pertimbangkan implikasi hak ciptanya
-terlebih dulu.
+This dataset is built from copyrighted material (the novel *Majo no
+Tabitabi* by Jougi Shiraishi). This pipeline is intended for
+personal/research use on your own machine, using a copy of the novel
+you own. If you plan to share the resulting fine-tuned model or dataset
+publicly/commercially, consider the copyright implications first.
