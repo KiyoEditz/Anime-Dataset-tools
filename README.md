@@ -55,36 +55,53 @@ Anthropic API key: sign up at `console.anthropic.com` → *API Keys* menu.
 
 ```
 elaina-dataset-tool/
-  input/      <- put your novel .epub / .pdf files here
-  text/       <- (auto) per-chapter extracted text
-  output/     <- (auto) all final & intermediate results
+  input/          <- put your novel .epub / .pdf files here
+  confirm_xhtml/  <- (step 1) unpacked XHTML in true reading order for verification
+    Volume_01/    <- candidate story chapters
+    _excluded_junk/ <- automatically isolated covers, TOC, copyright, ads, images
+  text/           <- (step 2) clean plain-text chapters (chapter_0001.txt, ...)
+  output/         <- (auto) all final & intermediate results
 ```
 
 ## How to use it
 
 1. Put your novel's EPUB/PDF files in the `input/` folder. Name them so
-   they sort in order (e.g. `01_vol1.epub`, `02_vol2.epub`) -- this
-   matters because Elaina's memory profile is built chronologically.
+   they sort in order (e.g. `01_vol1.epub`, `02_vol2.epub` or `Volume 01.epub`).
 
-2. Run the whole pipeline at once:
+2. **Stage 1: Two-Step Extraction with Confirmation** (prevents junk from leaking into the dataset):
+
+   - **Step 1A: Unpack & Triage to `confirm_xhtml/`**:
+     ```bash
+     python extract_text.py --step unpack
+     ```
+     This reads the EPUB spine in exact reading order, maps real TOC titles,
+     places real story chapters into `confirm_xhtml/Volume_XX/`, and moves
+     covers, table of contents, copyright, and image pages into `_excluded_junk/`.
+     Inspect `confirm_xhtml/` and check `confirm_xhtml/SUMMARY.md`. Delete any
+     file you don't want, or move back any file from `_excluded_junk/`.
+
+   - **Step 1B: Convert Confirmed XHTML to Clean Text**:
+     ```bash
+     python extract_text.py --step text
+     ```
+     This converts the confirmed XHTML files into sequentially numbered text files:
+     `text/chapter_0001.txt`, `text/chapter_0002.txt`, ..., with volume and title headers.
+     Spot-check `text/` to confirm the contents and file names match your expectations.
+
+3. **Stage 2 to 5: Run the LLM Extraction Pipeline**:
+   The chapters will be processed strictly chronologically by chapter name:
 
    ```bash
-   python run_all.py
-   ```
-
-   Or run each stage individually (useful for debugging / checking
-   results between stages):
-
-   ```bash
-   python extract_text.py        # 1. EPUB/PDF -> clean per-chapter text
-   python persona_extractor.py   # 2. build the personality & memory profile
-   python dialogue_extractor.py  # 3. extract dialogue pairs from the novel
+   python persona_extractor.py     # 2. build the personality & memory profile
+   python dialogue_extractor.py    # 3. extract dialogue pairs from the novel
    python augment_synthetic.py 10  # 4. (optional) add original synthetic Q&A
-   python build_dataset.py       # 5. assemble the final JSONL
-   python validate_dataset.py    # check the final output's quality & structure
+   python build_dataset.py         # 5. assemble the final JSONL
+   python validate_dataset.py      # check the final output's quality & structure
    ```
 
-3. Final output: `output/elaina_finetune_dataset.jsonl`, format:
+   *(Or run `python run_all.py` once your text/ folder is confirmed!)*
+
+4. Final output: `output/elaina_finetune_dataset.jsonl`, format:
 
    ```json
    {"messages": [
@@ -96,6 +113,7 @@ elaina-dataset-tool/
 
    This format is directly compatible with most chat fine-tuning
    frameworks (Axolotl, LLaMA-Factory, the OpenAI fine-tuning format, etc.).
+
 
 ## Why is this staged?
 

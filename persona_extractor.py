@@ -25,18 +25,16 @@ from llm_client import chat_json, chat
 TEXT_DIR = Path("text")
 OUTPUT_DIR = Path("output")
 
-# How many characters of chapter text to send per call. Increase this if
-# your model has a large context window (e.g. 128k via NVIDIA Build) so
-# fewer calls are needed and each call gets fuller context. For a 40k
-# model like Hermes-4-14B, this default is safe.
-PERSONA_CHUNK_CHARS = int(os.environ.get("PERSONA_CHUNK_CHARS", "6000"))
+# How many characters of chapter text to send per call.
+# Set to 0 to send the ENTIRE chapter at once (recommended for large context models
+# like Qwen 3.6 / Qwen 2.5 with 128k-262k context window on Colab A100 or Kaggle T4x2).
+# Or set to a positive integer (e.g. 50000) to cap chapter length.
+PERSONA_CHUNK_CHARS = int(os.environ.get("PERSONA_CHUNK_CHARS", "0"))
 
 # The JSON profile keeps accumulating each chapter and is sent IN FULL on
-# every call. For long novels (many chapters), this can grow large and
-# approach the context window limit. Once its size (in characters) crosses
-# this threshold, the profile is automatically "compressed" (duplicates/
-# redundancy cleaned up by the model) before moving to the next chapter.
-MAX_PROFILE_CHARS = int(os.environ.get("MAX_PROFILE_CHARS", "8000"))
+# every call. For large context models (262k context), this can safely grow
+# up to 50k+ chars before needing compression.
+MAX_PROFILE_CHARS = int(os.environ.get("MAX_PROFILE_CHARS", "40000"))
 
 # Checkpoint: stores the profile + the name of the last chapter completed,
 # so if the script stops mid-run (error, daily rate limit, power outage,
@@ -193,11 +191,18 @@ def build_profile():
     for chap_path in tqdm(chapter_files, desc="Building Elaina's profile"):
         chapter_text = chap_path.read_text(encoding="utf-8")
 
+        # If PERSONA_CHUNK_CHARS <= 0, send the full chapter text
+        chapter_content = (
+            chapter_text
+            if PERSONA_CHUNK_CHARS <= 0 or PERSONA_CHUNK_CHARS >= len(chapter_text)
+            else chapter_text[:PERSONA_CHUNK_CHARS]
+        )
+
         user_prompt = (
             "Profile built so far (JSON, may be empty if this is the first chapter):\n"
             f"{json.dumps(profile, ensure_ascii=False)}\n\n"
-            "Next chapter excerpt:\n"
-            f"{chapter_text[:PERSONA_CHUNK_CHARS]}"
+            "Next chapter text:\n"
+            f"{chapter_content}"
         )
 
         try:

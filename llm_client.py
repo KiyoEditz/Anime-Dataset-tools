@@ -53,11 +53,18 @@ load_dotenv()
 from openai import OpenAI, RateLimitError
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_not_exception_type
 
-BASE_URL = os.environ.get("LLM_BASE_URL", "http://localhost:4000/v1")
-API_KEY = os.environ.get("LLM_API_KEY", "sk-local")
-MODEL = os.environ.get("LLM_MODEL", "hermes-4-14b")
+def _normalize_base_url(url: str) -> str:
+    url = url.strip().rstrip("/")
+    if not url.endswith("/v1"):
+        url = f"{url}/v1"
+    return url
 
-client = OpenAI(base_url=BASE_URL, api_key=API_KEY)
+BASE_URL = _normalize_base_url(os.environ.get("LLM_BASE_URL", "http://localhost:8080/v1"))
+API_KEY = os.environ.get("LLM_API_KEY", "sk-local")
+MODEL = os.environ.get("LLM_MODEL", "default")
+TIMEOUT = float(os.environ.get("LLM_TIMEOUT", "300"))
+
+client = OpenAI(base_url=BASE_URL, api_key=API_KEY, timeout=TIMEOUT)
 
 # ── Per-call spacing (requests-per-minute style limits) ────────────────────
 _MIN_INTERVAL = float(os.environ.get("LLM_MIN_SECONDS_BETWEEN_CALLS", "0"))
@@ -154,20 +161,38 @@ def _parse_retry_after_seconds(message: str):
     return hours * 3600 + minutes * 60 + seconds
 
 
+def _clean_model_output(raw: str) -> str:
+    """Strip reasoning/think tags and clean extra whitespace."""
+    if not raw:
+        return ""
+    # Strip <think>...</think> (DeepSeek-R1 / Qwen reasoning models)
+    cleaned = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL | re.IGNORECASE)
+    return cleaned.strip()
+
+
 def _extract_json_block(raw: str):
     """Extract the first JSON block from the model's output, even if wrapped in text/markdown."""
-    raw = raw.strip()
-    raw = re.sub(r"^```(?:json)?", "", raw).strip()
-    raw = re.sub(r"```$", "", raw).strip()
+    if not raw:
+        return None
+    raw = _clean_model_output(raw)
 
-    # try parsing directly first
+    # 1. Try parsing directly
     try:
         return json.loads(raw)
     except json.JSONDecodeError:
         pass
 
-    # fall back to finding the outermost { ... } or [ ... ] block
-    for opener, closer in (("[", "]"), ("{", "}")):
+    # 2. Extract from markdown code fences ```json ... ``` or ``` ... ```
+    fence_matches = re.findall(r"```(?:json)?\s*([\s\S]*?)\s*```", raw, flags=re.IGNORECASE)
+    for candidate in fence_matches:
+        candidate = candidate.strip()
+        try:
+            return json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+
+    # 3. Fall back to finding the outermost { ... } or [ ... ] block
+    for opener, closer in (("{", "}"), ("[", "]")):
         start = raw.find(opener)
         end = raw.rfind(closer)
         if start != -1 and end != -1 and end > start:
@@ -207,7 +232,8 @@ def _chat_once(system_prompt: str, user_prompt: str, temperature: float) -> str:
     actual_total = getattr(usage, "total_tokens", None) if usage else None
     _finalize_token_usage(reservation, actual_total)
 
-    return response.choices[0].message.content
+    content = response.choices[0].message.content or ""
+    return _clean_model_output(content)
 
 
 def chat(system_prompt: str, user_prompt: str, temperature: float = 0.4) -> str:

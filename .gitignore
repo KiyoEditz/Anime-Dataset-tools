@@ -135,3 +135,4 @@ cython_debug/
 input/*
 output/*
 text/*
+confirm_xhtml/*

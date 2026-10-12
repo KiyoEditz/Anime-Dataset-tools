@@ -26,12 +26,20 @@ def run(cmd: list[str], step_name: str):
 
 def main():
     parser = argparse.ArgumentParser()
+    parser.add_argument("--skip-extract", action="store_true", help="Skip text extraction (use existing confirmed text/ files)")
+
     parser.add_argument("--synthetic", type=int, default=10, help="Number of synthetic Q&A batches")
     parser.add_argument("--skip-synthetic", action="store_true", help="Skip synthetic augmentation")
     args = parser.parse_args()
 
-    run(["extract_text.py"], "1/5 Extracting text from EPUB/PDF")
+    if not args.skip_extract:
+        # If confirm_xhtml already exists, run step text; otherwise run --all
+        run(["extract_text.py", "--all"], "1/5 Extracting text from EPUB/PDF")
+    else:
+        print("\n>> 1/5 Skipped extraction (using existing text/ files)")
+
     run(["persona_extractor.py"], "2/5 Building Elaina's profile & memories")
+
     run(["dialogue_extractor.py"], "3/5 Extracting dialogue pairs from the novel")
 
     if not args.skip_synthetic:

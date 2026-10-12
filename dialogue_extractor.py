@@ -24,11 +24,10 @@ TEXT_DIR = Path("text")
 OUTPUT_DIR = Path("output")
 OUTPUT_FILE = OUTPUT_DIR / "raw_dialogue_pairs.jsonl"
 
-# Increase this if your model has a large context window (e.g. 128k via
-# NVIDIA Build) -> fuller scene context & fewer API calls. For a 40k model
-# like Hermes-4-14B, this default is safe (leaves plenty of room for the
-# system prompt + JSON output).
-DIALOGUE_CHUNK_CHARS = int(os.environ.get("DIALOGUE_CHUNK_CHARS", "4000"))
+# How many characters of chapter text to process per call.
+# Set to 0 to send the ENTIRE chapter in a single call (ideal for Qwen 3.6 / 262k context).
+# Or set to a positive integer (e.g. 35000) to process in larger scene-preserving chunks.
+DIALOGUE_CHUNK_CHARS = int(os.environ.get("DIALOGUE_CHUNK_CHARS", "35000"))
 
 # Checkpoint: list of chapter names that are FULLY done (all their chunks
 # processed). If the script stops mid-run, the next run resumes from the
@@ -117,7 +116,8 @@ def main():
             chapter_text = chap_path.read_text(encoding="utf-8")
 
             # process in chunks to stay within the context window of whichever model is used
-            chunk_size = DIALOGUE_CHUNK_CHARS
+            # If DIALOGUE_CHUNK_CHARS <= 0, the entire chapter is processed in 1 single call
+            chunk_size = len(chapter_text) if DIALOGUE_CHUNK_CHARS <= 0 else DIALOGUE_CHUNK_CHARS
             chunks = [
                 chapter_text[i : i + chunk_size]
                 for i in range(0, len(chapter_text), chunk_size)
