@@ -14,6 +14,7 @@ Output:
     output/elaina_system_prompt.txt -> ready-to-use system prompt for fine-tuning
 """
 
+import argparse
 import json
 import os
 from pathlib import Path
@@ -22,25 +23,25 @@ from tqdm import tqdm
 
 from llm_client import chat_json, chat
 
-TEXT_DIR = Path("text")
-OUTPUT_DIR = Path("output")
+LANG = os.environ.get("DATASET_LANG", "EN").upper()
+TEXT_DIR = Path(f"text-{LANG}")
+OUTPUT_DIR = Path(f"output-{LANG}")
+CHECKPOINT_FILE = OUTPUT_DIR / "persona_checkpoint.json"
+
+
+def set_language(lang: str):
+    """Dynamically set the active language and target directories."""
+    global LANG, TEXT_DIR, OUTPUT_DIR, CHECKPOINT_FILE
+    LANG = lang.upper()
+    TEXT_DIR = Path(f"text-{LANG}")
+    OUTPUT_DIR = Path(f"output-{LANG}")
+    CHECKPOINT_FILE = OUTPUT_DIR / "persona_checkpoint.json"
 
 # How many characters of chapter text to send per call.
-# Set to 0 to send the ENTIRE chapter at once (recommended for large context models
-# like Qwen 3.6 / Qwen 2.5 with 128k-262k context window on Colab A100 or Kaggle T4x2).
-# Or set to a positive integer (e.g. 50000) to cap chapter length.
 PERSONA_CHUNK_CHARS = int(os.environ.get("PERSONA_CHUNK_CHARS", "0"))
 
-# The JSON profile keeps accumulating each chapter and is sent IN FULL on
-# every call. For large context models (262k context), this can safely grow
-# up to 50k+ chars before needing compression.
+# Maximum profile size before compression
 MAX_PROFILE_CHARS = int(os.environ.get("MAX_PROFILE_CHARS", "40000"))
-
-# Checkpoint: stores the profile + the name of the last chapter completed,
-# so if the script stops mid-run (error, daily rate limit, power outage,
-# etc.), the next run RESUMES from where it left off instead of
-# reprocessing every chapter from scratch (which wastes API quota).
-CHECKPOINT_FILE = OUTPUT_DIR / "persona_checkpoint.json"
 
 PROFILE_SCHEMA_HINT = """
 The JSON format you MUST produce (a single object):
@@ -223,23 +224,45 @@ def build_profile():
     with open(OUTPUT_DIR / "elaina_profile.json", "w", encoding="utf-8") as f:
         json.dump(profile, f, indent=2, ensure_ascii=False)
 
-    print("Profile saved to output/elaina_profile.json")
+    print(f"Profile saved to {OUTPUT_DIR}/elaina_profile.json")
     return profile
 
 
 def write_system_prompt(profile: dict):
     """Ask the model to turn the JSON profile into a ready-to-use system prompt."""
-    summarizer_prompt = (
-        "Here is a structured character bible for Elaina from "
-        "'Majo no Tabitabi / The Journey of Elaina', extracted from the novel:\n\n"
-        f"{json.dumps(profile, indent=2, ensure_ascii=False)}\n\n"
-        "Rewrite this into ONE system prompt (3-6 paragraphs, in English) that "
-        "instructs an AI to consistently roleplay as Elaina: her personality, "
-        "her speech style, the values she holds, and the important "
-        "memories/background she should remember. Write it from the "
-        "perspective of instructions TO the AI (\"You are Elaina...\"), not "
-        "from Elaina's own point of view."
-    )
+    if LANG == "JP":
+        summarizer_prompt = (
+            "Here is a structured character bible for Elaina from "
+            "'Majo no Tabitabi / The Journey of Elaina', extracted from the novel:\n\n"
+            f"{json.dumps(profile, indent=2, ensure_ascii=False)}\n\n"
+            "Rewrite this into ONE comprehensive system prompt (3-6 paragraphs, in JAPANESE) that "
+            "instructs an AI to consistently roleplay as Elaina in Japanese: her personality, "
+            "her speech style (一人称「私」、礼儀正しくも毒舌でナルシストな面や好奇心旺盛な性格、旅の魔女としての語り口), "
+            "the values she holds, and the important memories/background she should remember. "
+            "Write it as instructions TO the AI (\"あなたは『魔女の旅々』の主人公、灰の魔女イレイナです...\")."
+        )
+    elif LANG == "ID":
+        summarizer_prompt = (
+            "Here is a structured character bible for Elaina from "
+            "'Majo no Tabitabi / The Journey of Elaina', extracted from the novel:\n\n"
+            f"{json.dumps(profile, indent=2, ensure_ascii=False)}\n\n"
+            "Rewrite this into ONE system prompt (3-6 paragraphs, in INDONESIAN) that "
+            "instructs an AI to consistently roleplay as Elaina: her personality, "
+            "her speech style, her values, and her memories. "
+            "Write it as instructions TO the AI (\"Kamu adalah Elaina, Penyihir Kelabu dari 'Majo no Tabitabi'...\")."
+        )
+    else:
+        summarizer_prompt = (
+            "Here is a structured character bible for Elaina from "
+            "'Majo no Tabitabi / The Journey of Elaina', extracted from the novel:\n\n"
+            f"{json.dumps(profile, indent=2, ensure_ascii=False)}\n\n"
+            "Rewrite this into ONE system prompt (3-6 paragraphs, in English) that "
+            "instructs an AI to consistently roleplay as Elaina: her personality, "
+            "her speech style, the values she holds, and the important "
+            "memories/background she should remember. Write it from the "
+            "perspective of instructions TO the AI (\"You are Elaina...\"), not "
+            "from Elaina's own point of view."
+        )
     system_prompt_text = chat(
         "You are an assistant skilled at writing detailed, consistent AI character system prompts.",
         summarizer_prompt,
@@ -248,9 +271,29 @@ def write_system_prompt(profile: dict):
 
     OUTPUT_DIR.mkdir(exist_ok=True)
     (OUTPUT_DIR / "elaina_system_prompt.txt").write_text(system_prompt_text.strip(), encoding="utf-8")
-    print("System prompt saved to output/elaina_system_prompt.txt")
+    print(f"System prompt saved to {OUTPUT_DIR}/elaina_system_prompt.txt")
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Build Elaina's character profile and system prompt")
+    parser.add_argument("--lang", choices=["EN", "JP", "ID", "en", "jp", "id"], default=None)
+    parser.add_argument("--EN", dest="lang_en", action="store_true", help="Shortcut for --lang EN")
+    parser.add_argument("--JP", dest="lang_jp", action="store_true", help="Shortcut for --lang JP")
+    parser.add_argument("--ID", dest="lang_id", action="store_true", help="Shortcut for --lang ID")
+    args = parser.parse_args()
+
+    if args.lang_jp:
+        target_lang = "JP"
+    elif args.lang_en:
+        target_lang = "EN"
+    elif args.lang_id:
+        target_lang = "ID"
+    elif args.lang:
+        target_lang = args.lang.upper()
+    else:
+        target_lang = os.environ.get("DATASET_LANG", "EN").upper()
+
+    set_language(target_lang)
+
     final_profile = build_profile()
     write_system_prompt(final_profile)

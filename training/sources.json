@@ -1,0 +1,32 @@
+{
+  "_comment": "Language slots for training/prepare_dataset.py. All 3 languages (EN, ID, JP) are ready and mixed into training/out/.",
+  "languages": [
+    {
+      "lang": "en",
+      "status": "ready",
+      "files": [
+        "output-EN/raw_dialogue_pairs.jsonl",
+        "output-EN/synthetic_pairs.jsonl"
+      ],
+      "target_rows": 12000
+    },
+    {
+      "lang": "id",
+      "status": "ready",
+      "files": [
+        "output-ID/raw_dialogue_pairs.jsonl",
+        "output-ID/synthetic_pairs.jsonl"
+      ],
+      "target_rows": 12200
+    },
+    {
+      "lang": "jp",
+      "status": "ready",
+      "files": [
+        "output-JP/raw_dialogue_pairs.jsonl",
+        "output-JP/synthetic_pairs.jsonl"
+      ],
+      "target_rows": 12200
+    }
+  ]
+}

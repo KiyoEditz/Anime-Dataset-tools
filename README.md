@@ -55,13 +55,68 @@ Anthropic API key: sign up at `console.anthropic.com` → *API Keys* menu.
 
 ```
 elaina-dataset-tool/
-  input/          <- put your novel .epub / .pdf files here
-  confirm_xhtml/  <- (step 1) unpacked XHTML in true reading order for verification
-    Volume_01/    <- candidate story chapters
-    _excluded_junk/ <- automatically isolated covers, TOC, copyright, ads, images
-  text/           <- (step 2) clean plain-text chapters (chapter_0001.txt, ...)
-  output/         <- (auto) all final & intermediate results
+  input/              <- put your novel .epub / .pdf files here (shared)
+  confirm_xhtml-EN/   <- (step 1) unpacked English XHTML chapters & review
+  text-EN/            <- (step 2) clean plain-text English chapters (chapter_0001.txt, ...)
+  output-EN/          <- English character bible, dialogues, & finetune dataset
+  confirm_xhtml-JP/   <- unpacked Japanese XHTML chapters
+  text-JP/            <- clean plain-text Japanese chapters (furigana <rt> cleaned)
+  output-JP/          <- Japanese character bible & Japanese finetune dataset
+  text-ID/            <- Indonesian chapters translated from JP via Hy-MT2-30B
+  output-ID/          <- Indonesian character bible & Indonesian finetune dataset
 ```
+
+## Multi-Language Workflow (EN, JP, ID)
+
+The pipeline supports full dual-mode and tri-mode dataset generation via `--EN`, `--JP`, and `--ID`:
+
+### 1. English Pipeline (`--EN` mode)
+Run the entire English dataset creation:
+```bash
+py -3.14 run_all.py --EN
+```
+Or step by step:
+```bash
+py -3.14 extract_text.py --all --EN
+py -3.14 persona_extractor.py --EN
+py -3.14 dialogue_extractor.py --EN
+py -3.14 augment_synthetic.py 10 --EN
+py -3.14 build_dataset.py --EN
+py -3.14 validate_dataset.py --EN
+```
+
+### 2. Japanese Pipeline (`--JP` mode)
+1. Place Japanese light novel EPUBs in `input/`.
+2. Run extraction (automatically removes `<rt>`/`<rp>` ruby furigana tags and filters Japanese junk TOC/inserts):
+   ```bash
+   py -3.14 run_all.py --JP
+   ```
+   Or step by step:
+   ```bash
+   py -3.14 extract_text.py --all --JP
+   py -3.14 persona_extractor.py --JP
+   py -3.14 dialogue_extractor.py --JP
+   py -3.14 augment_synthetic.py 10 --JP
+   py -3.14 build_dataset.py --JP
+   py -3.14 validate_dataset.py --JP
+   ```
+
+### 3. Indonesian Translation Pipeline (JP ➔ ID)
+For Indonesian datasets, translation is powered by **Tencent Hy-MT2-30B-A3B** via `llama-server` on Kaggle dual T4:
+1. Open [`kaggle_llm_server.py`](file:///d:/elaina-dataset-tool/kaggle_llm_server.py) (copy into a Kaggle notebook cell or upload as script), set Accelerator to **GPU T4 x2**, Internet to **On**, and run it.
+2. Copy the printed Cloudflare URL (e.g. `https://xxx.trycloudflare.com`).
+3. Translate Japanese novel text to Indonesian:
+   ```bash
+   # Test connection first:
+   py -3.14 translate_novel.py --test --base-url https://xxx.trycloudflare.com
+
+   # Translate all Japanese chapters in text-JP/ -> text-ID/:
+   py -3.14 translate_novel.py --base-url https://xxx.trycloudflare.com
+   ```
+4. Build the Indonesian dataset from the translated text:
+   ```bash
+   py -3.14 run_all.py --ID --skip-extract
+   ```
 
 ## How to use it
 

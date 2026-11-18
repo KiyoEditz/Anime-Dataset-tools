@@ -33,6 +33,7 @@ Workflow:
 import argparse
 import html
 import json
+import os
 import posixpath
 import re
 import shutil
@@ -40,25 +41,59 @@ import sys
 import zipfile
 import xml.etree.ElementTree as ET
 from collections import Counter
+from html.parser import HTMLParser
 from pathlib import Path
 
-from bs4 import BeautifulSoup
+try:
+    from bs4 import BeautifulSoup
+except ImportError:
+    BeautifulSoup = None
 
+LANG = os.environ.get("DATASET_LANG", "EN").upper()
 INPUT_DIR = Path("input")
-CONFIRM_DIR = Path("confirm_xhtml")
+CONFIRM_DIR = Path(f"confirm_xhtml-{LANG}")
 JUNK_DIR = CONFIRM_DIR / "_excluded_junk"
-TEXT_DIR = Path("text")
+TEXT_DIR = Path(f"text-{LANG}")
+
+
+def set_language(lang: str):
+    """Dynamically set the active language and target directories."""
+    global LANG, CONFIRM_DIR, JUNK_DIR, TEXT_DIR
+    LANG = lang.upper()
+    CONFIRM_DIR = Path(f"confirm_xhtml-{LANG}")
+    JUNK_DIR = CONFIRM_DIR / "_excluded_junk"
+    TEXT_DIR = Path(f"text-{LANG}")
+
 
 # Patterns identifying non-story pages (frontmatter, backmatter, afterwords, ads)
+# Supports English and Japanese light novel structure tokens
 JUNK_NAME_PATTERN = re.compile(
-    r"(cover|insert|titlepage|copyright|toc|nav|newsletter|advertisement|colophon|contents|afterword|appendix|postscript)",
+    r"(cover|insert|titlepage|copyright|caution|toc|nav|newsletter|advertisement|colophon|contents|"
+    r"afterword|appendix|postscript|credit|author|profile|fanletter|p-99[0-9]|p-899|"
+    r"表紙|口絵|扉|目次|奥付|あとがき|後書き|解説|登場人物|人物紹介|広告)",
     re.IGNORECASE,
 )
 
+# Canonical chapter prefixes in TOC titles that are always real story chapters
+STORY_TOC_PREFIX = re.compile(
+    r"^(?:第[一二三四五六七八九十百零〇0-9０-９]+[章話]|Chapter\s*\d+|Prologue|Epilogue|Interlude|"
+    r"プロローグ|エピローグ|幕間|投書話)",
+    re.IGNORECASE,
+)
+
+# Trailing bonus metadata / author commentary attached to short stories (e.g. Vol 15 SS collection)
+TRAILING_META_PATTERN = re.compile(
+    r"(?:^|\n+)\s*【(?:初出情報|著者コメント)】[\s\S]*$"
+)
+
+# Full-width to half-width digit translation table for natural volume sorting
+_FW_DIGITS = str.maketrans("０１２３４５６７８９", "0123456789")
+
 
 # Minimum text length (in characters) to be considered a real story chapter.
-# Single illustration/image pages usually have < 100 characters.
+# Single illustration/image pages have 0 characters once <head>/<title> are stripped.
 MIN_CHAPTER_CHARS = 200
+MIN_CHAPTER_CHARS_JP = 30
 
 # PDF boilerplate detection settings
 BOILERPLATE_EDGE_LINES = 3
@@ -69,8 +104,108 @@ BOILERPLATE_FREQ_THRESHOLD = 0.5
 def sanitize_filename(name: str) -> str:
     """Sanitize string for Windows filesystem."""
     s = re.sub(r'[\\/*?:"<>|]', "", name)
-    s = re.sub(r"[\s_]+", "_", s)
+    s = re.sub(r"[\s\u3000_]+", "_", s)
     return s.strip("._")
+
+
+def natural_epub_sort_key(epub_path: Path):
+    """
+    Sort EPUB files chronologically by series group and numeric volume number,
+    normalizing full-width Japanese digits (０-９ -> 0-9).
+    """
+    norm_name = epub_path.stem.translate(_FW_DIGITS)
+    if "ガクエン" in norm_name or "学園" in norm_name:
+        series_group = 1
+    elif "リリエールと祈りの国" in norm_name:
+        series_group = 2
+    elif "イノリノクニノリリエール" in norm_name or "祈りの国のリリエール" in norm_name:
+        series_group = 3
+    elif "マジョノタビタビ" in norm_name or "魔女の旅々" in norm_name or "Wandering Witch" in norm_name:
+        series_group = 0
+    else:
+        series_group = 4
+
+    nums = [int(n) for n in re.findall(r"\d+", norm_name)]
+    vol_num = nums[0] if nums else 0
+    return (series_group, vol_num, norm_name.lower())
+
+
+class _StdlibHTMLTextParser(HTMLParser):
+    """Fallback HTML-to-text parser when BeautifulSoup (bs4) is not installed."""
+
+    SKIP_TAGS = {"head", "title", "script", "style", "meta", "link", "rt", "rp", "svg", "nav"}
+    BLOCK_TAGS = {"p", "h1", "h2", "h3", "h4", "h5", "h6", "blockquote", "div", "li"}
+
+    def __init__(self):
+        super().__init__()
+        self.skip_depth = 0
+        self.paragraphs = []
+        self.current = []
+
+    def _flush(self):
+        if self.current:
+            txt = "".join(self.current).strip()
+            if txt:
+                self.paragraphs.append(txt)
+            self.current = []
+
+    def handle_starttag(self, tag, attrs):
+        tag_l = tag.lower()
+        if tag_l in self.SKIP_TAGS:
+            self.skip_depth += 1
+        elif self.skip_depth == 0:
+            if tag_l in self.BLOCK_TAGS:
+                self._flush()
+            elif tag_l == "br":
+                self.current.append("\n")
+
+    def handle_endtag(self, tag):
+        tag_l = tag.lower()
+        if tag_l in self.SKIP_TAGS:
+            if self.skip_depth > 0:
+                self.skip_depth -= 1
+        elif self.skip_depth == 0 and tag_l in self.BLOCK_TAGS:
+            self._flush()
+
+    def handle_data(self, data):
+        if self.skip_depth == 0:
+            self.current.append(data)
+
+    def get_paragraphs(self) -> list[str]:
+        self._flush()
+        return self.paragraphs
+
+
+class _StdlibAnchorParser(HTMLParser):
+    """Fallback HTML anchor (<a>) extractor for TOC documents when bs4 is not installed."""
+
+    def __init__(self):
+        super().__init__()
+        self.links = []
+        self._in_a = False
+        self._href = ""
+        self._text_parts = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag.lower() == "a":
+            attr_dict = dict(attrs)
+            self._href = attr_dict.get("href", "") or ""
+            self._in_a = True
+            self._text_parts = []
+        elif self._in_a and tag.lower() in ("rt", "rp"):
+            pass
+
+    def handle_endtag(self, tag):
+        if tag.lower() == "a" and self._in_a:
+            title = "".join(self._text_parts).strip()
+            self.links.append((self._href, title))
+            self._in_a = False
+            self._href = ""
+            self._text_parts = []
+
+    def handle_data(self, data):
+        if self._in_a:
+            self._text_parts.append(data)
 
 
 def find_opf_and_dir(z: zipfile.ZipFile):
@@ -85,11 +220,26 @@ def find_opf_and_dir(z: zipfile.ZipFile):
     return opf_path, opf_dir
 
 
+def _extract_html_links(raw_bytes: bytes) -> list[tuple[str, str]]:
+    """Extract (href, title) pairs from an HTML/XHTML TOC document."""
+    if BeautifulSoup is not None:
+        toc_soup = BeautifulSoup(raw_bytes, "html.parser")
+        for elem in toc_soup(["rt", "rp"]):
+            elem.decompose()
+        return [(a.get("href", ""), a.get_text().strip()) for a in toc_soup.find_all("a")]
+    parser = _StdlibAnchorParser()
+    parser.feed(raw_bytes.decode("utf-8", errors="replace"))
+    return parser.links
+
+
 def parse_epub_structure(epub_path: Path):
     """
     Parses an EPUB's true spine (reading order), manifest, and Table of Contents (TOC).
+    Supports both EPUB3 navigation documents (nav.xhtml / navigation-documents.xhtml / p-toc.xhtml)
+    and EPUB2 NCX files (toc.ncx).
     Returns:
         spine_items: list of archive href paths in exact reading order
+        manifest: dict of manifest items
         toc_map: dict mapping archive href -> chapter title from TOC
     """
     with zipfile.ZipFile(epub_path, "r") as z:
@@ -98,12 +248,13 @@ def parse_epub_structure(epub_path: Path):
 
         manifest = {}
         for item in opf_root.findall(".//{http://www.idpf.org/2007/opf}item"):
-            item_id = item.attrib.get("id")
-            href = item.attrib.get("href")
+            item_id = item.attrib.get("id", "")
+            href = item.attrib.get("href", "")
             full_href = posixpath.normpath(posixpath.join(opf_dir, href)) if opf_dir else href
             manifest[item_id] = {
                 "href": full_href,
                 "media_type": item.attrib.get("media-type", ""),
+                "properties": item.attrib.get("properties", ""),
             }
 
         spine = []
@@ -112,27 +263,54 @@ def parse_epub_structure(epub_path: Path):
             if idref in manifest:
                 spine.append(manifest[idref]["href"])
 
-        # Locate TOC file
         toc_map = {}
-        toc_href = None
-        for item_id, info in manifest.items():
-            href_lower = info["href"].lower()
-            if "toc" in item_id.lower() or href_lower.endswith(("toc.xhtml", "toc.html", "nav.xhtml")):
-                toc_href = info["href"]
-                break
+        archive_names = set(z.namelist())
 
-        if toc_href and toc_href in z.namelist():
-            toc_soup = BeautifulSoup(z.read(toc_href), "html.parser")
-            for a in toc_soup.find_all("a"):
-                title = a.get_text().strip()
-                target_raw = a.get("href", "").split("#")[0]
-                if not target_raw:
-                    continue
-                target_full = posixpath.normpath(
-                    posixpath.join(posixpath.dirname(toc_href), target_raw)
+        for item_id, info in manifest.items():
+            href = info["href"]
+            if href not in archive_names:
+                continue
+            href_lower = href.lower()
+            media_type = info["media_type"].lower()
+            props = info["properties"].lower()
+
+            # 1. EPUB2 NCX Table of Contents (toc.ncx)
+            if media_type == "application/x-dtbncx+xml" or href_lower.endswith(".ncx"):
+                try:
+                    ncx_root = ET.fromstring(z.read(href))
+                    for nav_point in ncx_root.findall(".//{http://www.daisy.org/z3986/2005/ncx/}navPoint"):
+                        title = nav_point.findtext(
+                            ".//{http://www.daisy.org/z3986/2005/ncx/}text", ""
+                        ).strip()
+                        content_el = nav_point.find(".//{http://www.daisy.org/z3986/2005/ncx/}content")
+                        if content_el is not None:
+                            target_raw = content_el.attrib.get("src", "").split("#")[0]
+                            if target_raw and title:
+                                target_full = posixpath.normpath(
+                                    posixpath.join(posixpath.dirname(href), target_raw)
+                                )
+                                if target_full not in toc_map:
+                                    toc_map[target_full] = title
+                except ET.ParseError:
+                    pass
+
+            # 2. EPUB3 Navigation Documents & Inline HTML TOCs
+            elif (
+                "nav" in props
+                or "toc" in item_id.lower()
+                or href_lower.endswith(
+                    ("toc.xhtml", "toc.html", "nav.xhtml", "navigation-documents.xhtml")
                 )
-                if target_full not in toc_map and title:
-                    toc_map[target_full] = title
+            ):
+                for raw_href, title in _extract_html_links(z.read(href)):
+                    target_raw = raw_href.split("#")[0]
+                    if not target_raw or not title:
+                        continue
+                    target_full = posixpath.normpath(
+                        posixpath.join(posixpath.dirname(href), target_raw)
+                    )
+                    if target_full not in toc_map:
+                        toc_map[target_full] = title
 
         return spine, manifest, toc_map
 
@@ -140,33 +318,116 @@ def parse_epub_structure(epub_path: Path):
 def clean_html_to_text(raw_html: bytes | str) -> str:
     """
     Converts novel XHTML/HTML to clean, formatted text:
-    - Strips scripts/styles/meta
+    - Strips head/title/scripts/styles/meta/svg/nav
+    - Strips ruby/furigana annotations (<rt>, <rp>) to avoid duplicated kanji reading
+    - Strips trailing store-bonus metadata / author comments (【初出情報】 / 【著者コメント】)
     - Preserves paragraphs and dialogues
     - Normalizes unicode typography, whitespace, and dashes
     """
-    soup = BeautifulSoup(raw_html, "html.parser")
-    for elem in soup(["script", "style", "meta", "link"]):
-        elem.decompose()
+    if isinstance(raw_html, bytes):
+        html_str = raw_html.decode("utf-8", errors="replace")
+    else:
+        html_str = raw_html
 
-    paragraphs = []
-    # Collect block-level novel elements
-    for p in soup.find_all(["p", "h1", "h2", "h3", "h4", "h5", "h6", "blockquote", "div"]):
-        # Skip wrapper elements that contain nested paragraphs
-        if not p.find(["p", "h1", "h2", "h3", "blockquote"]):
-            txt = p.get_text(strip=True)
-            if txt:
-                paragraphs.append(txt)
+    if BeautifulSoup is not None:
+        soup = BeautifulSoup(html_str, "html.parser")
+        for elem in soup(["head", "title", "script", "style", "meta", "link", "rt", "rp", "svg", "nav"]):
+            elem.decompose()
 
-    if not paragraphs:
-        txt = soup.get_text(separator="\n", strip=True)
-        paragraphs = [line.strip() for line in txt.splitlines() if line.strip()]
+        paragraphs = []
+        for p in soup.find_all(["p", "h1", "h2", "h3", "h4", "h5", "h6", "blockquote", "div"]):
+            if not p.find(["p", "h1", "h2", "h3", "blockquote"]):
+                txt = p.get_text(strip=True)
+                if txt:
+                    paragraphs.append(txt)
+
+        if not paragraphs:
+            txt = soup.get_text(separator="\n", strip=True)
+            paragraphs = [line.strip() for line in txt.splitlines() if line.strip()]
+    else:
+        parser = _StdlibHTMLTextParser()
+        parser.feed(html_str)
+        paragraphs = parser.get_paragraphs()
 
     joined = "\n\n".join(paragraphs)
+    joined = joined.replace("\ufeff", "")
     joined = joined.replace("\r\n", "\n").replace("\r", "\n")
     joined = joined.replace("\xa0", " ").replace("\u3000", " ")
     joined = re.sub(r"[ \t]{2,}", " ", joined)
     joined = re.sub(r"\n{3,}", "\n\n", joined)
+    joined = TRAILING_META_PATTERN.sub("", joined)
     return joined.strip()
+
+
+def is_junk_page(base_name: str, toc_title: str, text_content: str) -> bool:
+    """
+    Determines whether an EPUB spine page is non-story junk (frontmatter, backmatter,
+    illustrations, copyright/caution notices, inline TOC, afterword, author bio,
+    fan-letter QR page, or colophon).
+    """
+    text_len = len(text_content)
+    min_chars = MIN_CHAPTER_CHARS_JP if LANG == "JP" else MIN_CHAPTER_CHARS
+
+    # 1. Filename or TOC title matches known junk pattern
+    if JUNK_NAME_PATTERN.search(base_name):
+        return True
+    if toc_title and not STORY_TOC_PREFIX.search(toc_title) and JUNK_NAME_PATTERN.search(toc_title):
+        return True
+
+    # 2. Empty or below language-specific minimum character threshold
+    if text_len < min_chars:
+        return True
+
+    lines = [ln.strip() for ln in text_content.splitlines() if ln.strip()]
+    first_line = lines[0] if lines else ""
+    head_sample = "\n".join(lines[:3])
+
+    # 3. Digital edition caution / copyright page
+    if (
+        "本書に掲載されているコンテンツの著作権" in text_content
+        or "無断で複製" in text_content
+        or ("本電子書籍は" in text_content and "著作権" in text_content)
+        or ("All rights reserved" in text_content and text_len < 3500)
+    ):
+        return True
+
+    # 4. Cover / illustration credits page
+    if text_len < 300 and ("カバー・口絵" in text_content or "本文イラスト" in text_content):
+        return True
+
+    # 5. Inline Table of Contents page (e.g. CONTENTS / 目次 without toc filename)
+    if re.match(r"^(?:CONTENTS|TABLE OF CONTENTS|目次)\b", first_line, re.IGNORECASE):
+        return True
+
+    # 6. Afterword (あとがき / 後書き / AFTERWORD or untitled author afterword)
+    if re.search(r"^(?:あとがき|後書き|AFTERWORD)\b", head_sample, re.IGNORECASE | re.MULTILINE):
+        return True
+    if re.search(
+        r"^(?:初めまして|はじめまして|お久しぶりです|こんにちは|こんばんは)[^。\n]{0,40}白石\s*定規",
+        first_line,
+    ):
+        return True
+
+    # 7. Author / Illustrator profile page
+    if text_len < 600 and re.match(r"^(?:AUTHOR|著者)\b", first_line, re.IGNORECASE):
+        return True
+
+    # 8. Fan-letter / questionnaire / QR code page
+    if text_len < 600 and (
+        "ファンレター、作品の感想をお待ちしています" in text_content
+        or "本書に関するご意見・ご感想は" in text_content
+    ):
+        return True
+
+    # 9. Colophon / publisher info page
+    if text_len < 800 and "発行人" in text_content and "発行所" in text_content:
+        return True
+
+    # 10. Short titlepage stub
+    if text_len < 60 and re.search(r"白石\s*定規", text_content):
+        return True
+
+    return False
 
 
 def step_unpack_epubs():
@@ -175,7 +436,8 @@ def step_unpack_epubs():
     Separates valid chapters from junk (covers, TOC, copyright, newsletters).
     """
     source_files = sorted(
-        [p for p in INPUT_DIR.glob("*.epub")]
+        [p for p in INPUT_DIR.glob("*.epub")],
+        key=natural_epub_sort_key,
     )
     if not source_files:
         print(f"[ERROR] No .epub files found in {INPUT_DIR}/.")
@@ -185,13 +447,13 @@ def step_unpack_epubs():
     JUNK_DIR.mkdir(parents=True, exist_ok=True)
 
     summary_lines = [
-        "# EPUB Unpack & Confirmation Summary\n",
+        f"# EPUB Unpack & Confirmation Summary ({LANG})\n",
         "This folder contains the unpacked XHTML files in exact reading spine order.",
-        "Please review the files before running Step 2 (`python extract_text.py --step text`).\n",
-        "- **Kept files**: In `confirm_xhtml/Volume_XX/` (these will be converted to text chapters)",
-        "- **Filtered junk**: In `confirm_xhtml/_excluded_junk/Volume_XX/` (covers, TOC, copyright, etc.)",
-        "- If an unwanted file slipped into `confirm_xhtml/Volume_XX/`, simply DELETE it or move it to `_excluded_junk/`.",
-        "- If a real story file was moved to `_excluded_junk/`, simply move it back to `confirm_xhtml/Volume_XX/`.\n",
+        f"Please review the files before running Step 2 (`python extract_text.py --step text --{LANG}`).\n",
+        f"- **Kept files**: In `{CONFIRM_DIR}/Volume_XX/` (these will be converted to text chapters)",
+        f"- **Filtered junk**: In `{JUNK_DIR}/Volume_XX/` (covers, TOC, copyright, etc.)",
+        f"- If an unwanted file slipped into `{CONFIRM_DIR}/Volume_XX/`, simply DELETE it or move it to `_excluded_junk/`.",
+        f"- If a real story file was moved to `_excluded_junk/`, simply move it back to `{CONFIRM_DIR}/Volume_XX/`.\n",
         "## Summary by Volume:\n",
     ]
 
@@ -199,7 +461,7 @@ def step_unpack_epubs():
     total_junks = 0
 
     print("=" * 65)
-    print("STEP 1: UNPACKING EPUBS TO CONFIRMATION FOLDER (confirm_xhtml/)")
+    print(f"STEP 1: UNPACKING EPUBS TO CONFIRMATION FOLDER ({CONFIRM_DIR}/)")
     print("=" * 65)
 
     for vol_idx, epub_path in enumerate(source_files, 1):
@@ -238,17 +500,11 @@ def step_unpack_epubs():
 
                 # Title resolution
                 toc_title = toc_map.get(item_href, "")
-                if toc_title:
-                    last_known_title = toc_title
-
-                # Determine if it's junk (checking both filename and TOC title)
-                is_junk = False
                 base_name = posixpath.basename(item_href)
-                if JUNK_NAME_PATTERN.search(base_name) or (toc_title and JUNK_NAME_PATTERN.search(toc_title)):
-                    is_junk = True
-                elif text_len < MIN_CHAPTER_CHARS:
-                    # Very short page, almost certainly illustration/insert/cover
-                    is_junk = True
+                is_junk = is_junk_page(base_name, toc_title, text_content)
+
+                if toc_title and not is_junk:
+                    last_known_title = toc_title
 
                 title_part = sanitize_filename(toc_title if toc_title else last_known_title)
                 if not title_part:
@@ -291,24 +547,24 @@ def step_unpack_epubs():
     print(f"Summary report written to: {summary_file}")
     print("=" * 65)
     print("\n[NEXT STEP]:")
-    print("1. Open the folder: confirm_xhtml/")
+    print(f"1. Open the folder: {CONFIRM_DIR}/")
     print("   Check the files in each Volume folder.")
     print("   - Delete any file you don't want (e.g. afterword if you don't want it).")
-    print("   - Check _excluded_junk/ to ensure no real chapters were filtered by accident.")
+    print(f"   - Check _excluded_junk/ in {CONFIRM_DIR}/ to ensure no real chapters were filtered by accident.")
     print("2. Once satisfied, run:")
-    print("   python extract_text.py --step text")
+    print(f"   python extract_text.py --step text --{LANG}")
     print("=" * 65)
 
 
 def step_convert_xhtml_to_text():
     """
-    Step 2: Converts confirmed .xhtml files from confirm_xhtml/ into clean plain text
-    in text/chapter_0001.txt, text/chapter_0002.txt, etc.
+    Step 2: Converts confirmed .xhtml files from confirm_xhtml-{LANG}/ into clean plain text
+    in text-{LANG}/chapter_0001.txt, text-{LANG}/chapter_0002.txt, etc.
     """
     volume_dirs = sorted([d for d in CONFIRM_DIR.iterdir() if d.is_dir() and not d.name.startswith("_")])
     if not volume_dirs:
         print(f"[ERROR] No confirmed volume folders found in {CONFIRM_DIR}/.")
-        print("Run `python extract_text.py --step unpack` first.")
+        print(f"Run `python extract_text.py --step unpack --{LANG}` first.")
         sys.exit(1)
 
     # Backup / clear old text files if present
@@ -326,9 +582,10 @@ def step_convert_xhtml_to_text():
 
     manifest = []
     chapter_counter = 1
+    min_step2_chars = MIN_CHAPTER_CHARS_JP if LANG == "JP" else 50
 
     print("=" * 65)
-    print("STEP 2: CONVERTING CONFIRMED XHTML FILES TO PLAIN TEXT (text/)")
+    print(f"STEP 2: CONVERTING CONFIRMED XHTML FILES TO PLAIN TEXT ({TEXT_DIR}/)")
     print("=" * 65)
 
     for vol_dir in volume_dirs:
@@ -341,8 +598,8 @@ def step_convert_xhtml_to_text():
         for xhtml_path in xhtml_files:
             raw = xhtml_path.read_bytes()
             clean_text = clean_html_to_text(raw)
-            if not clean_text or len(clean_text) < 50:
-                print(f"  [SKIP] {xhtml_path.name} is empty or under 50 characters.")
+            if not clean_text or len(clean_text) < min_step2_chars:
+                print(f"  [SKIP] {xhtml_path.name} is empty or under {min_step2_chars} characters.")
                 continue
 
             # Parse readable title from filename
@@ -382,8 +639,8 @@ def step_convert_xhtml_to_text():
     print("\n[NEXT STEP]:")
     print(f"1. Spot-check files in {TEXT_DIR}/ (e.g. chapter_0001.txt, chapter_0002.txt).")
     print("   Notice that Table of Contents and junk files are completely gone!")
-    print("2. When ready, run the LLM persona extractor:")
-    print("   python persona_extractor.py")
+    print(f"2. When ready, run the LLM persona extractor:")
+    print(f"   python persona_extractor.py --{LANG}")
     print("=" * 65)
 
 
@@ -408,7 +665,8 @@ def extract_pdf_fallback():
         joined = "\n\n".join(pages)
         # Split heuristic
         pattern = re.compile(
-            r"(?:^|\n)\s*((?:Chapter|CHAPTER|Prologue|PROLOGUE|Epilogue|EPILOGUE)\b[^\n]{0,60})\n",
+            r"(?:^|\n)\s*((?:Chapter|CHAPTER|Prologue|PROLOGUE|Epilogue|EPILOGUE|"
+            r"第[一二三四五六七八九十百零〇0-9０-９]+[章話]|プロローグ|エピローグ|幕間)\b[^\n]{0,60})\n",
             re.MULTILINE,
         )
         matches = list(pattern.finditer(joined))
@@ -442,19 +700,42 @@ def extract_pdf_fallback():
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Two-step novel extraction tool: EPUB -> confirm_xhtml/ -> text/"
+        description="Two-step novel extraction tool: EPUB -> confirm_xhtml-<LANG>/ -> text-<LANG>/"
     )
     parser.add_argument(
         "--step",
         choices=["unpack", "1", "text", "2"],
-        help="Run Step 1 (unpack to confirm_xhtml/) or Step 2 (convert confirmed XHTML to text/)",
+        help="Run Step 1 (unpack to confirm_xhtml-<LANG>/) or Step 2 (convert confirmed XHTML to text-<LANG>/)",
     )
     parser.add_argument(
         "--all",
         action="store_true",
         help="Run both Step 1 and Step 2 automatically in sequence",
     )
+    parser.add_argument(
+        "--lang",
+        choices=["EN", "JP", "ID", "en", "jp", "id"],
+        default=None,
+        help="Language mode: EN, JP, or ID (default: EN or DATASET_LANG env)",
+    )
+    parser.add_argument("--EN", dest="lang_en", action="store_true", help="Shortcut for --lang EN")
+    parser.add_argument("--JP", dest="lang_jp", action="store_true", help="Shortcut for --lang JP")
+    parser.add_argument("--ID", dest="lang_id", action="store_true", help="Shortcut for --lang ID")
     args = parser.parse_args()
+
+    # Resolve active language mode
+    if args.lang_jp:
+        target_lang = "JP"
+    elif args.lang_en:
+        target_lang = "EN"
+    elif args.lang_id:
+        target_lang = "ID"
+    elif args.lang:
+        target_lang = args.lang.upper()
+    else:
+        target_lang = os.environ.get("DATASET_LANG", "EN").upper()
+
+    set_language(target_lang)
 
     if not INPUT_DIR.exists() or not any(INPUT_DIR.iterdir()):
         print(f"[ERROR] No files found in {INPUT_DIR}/. Put your .epub files there first.")
@@ -484,17 +765,17 @@ def main():
 
     # Default if no arguments given:
     if not CONFIRM_DIR.exists() or not any(CONFIRM_DIR.iterdir()):
-        print("[INFO] No confirm_xhtml/ directory found. Running Step 1 (Unpack & Triage)...")
+        print(f"[INFO] No {CONFIRM_DIR}/ directory found. Running Step 1 (Unpack & Triage)...")
         if has_epub:
             step_unpack_epubs()
         if has_pdf:
             extract_pdf_fallback()
     else:
-        print("[INFO] confirm_xhtml/ already exists.")
+        print(f"[INFO] {CONFIRM_DIR}/ already exists.")
         print("Choose an action:")
-        print("  1. Convert confirmed files to text:  python extract_text.py --step text")
-        print("  2. Re-unpack everything from EPUB:    python extract_text.py --step unpack")
-        print("  3. Run both automatically:          python extract_text.py --all")
+        print(f"  1. Convert confirmed files to text:  python extract_text.py --step text --{LANG}")
+        print(f"  2. Re-unpack everything from EPUB:    python extract_text.py --step unpack --{LANG}")
+        print(f"  3. Run both automatically:          python extract_text.py --all --{LANG}")
 
 
 if __name__ == "__main__":

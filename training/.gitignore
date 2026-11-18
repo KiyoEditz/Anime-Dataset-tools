@@ -1,0 +1,8 @@
+##out/
+*.gguf
+checkpoints/
+merged/
+*.log
+__pycache__/
+data_id/
+data_jp/

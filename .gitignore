@@ -133,6 +133,12 @@ cython_debug/
 
 # Project specific
 input/*
-output/*
-text/*
-confirm_xhtml/*
+library
+lora_gemma_elaina_qa.txt
+output-EN/*
+output-ID/*
+output-JP/*
+text-EN/*
+text-jp/*
+confirm_xhtml-EN/*
+confirm_xhtml-JP/*

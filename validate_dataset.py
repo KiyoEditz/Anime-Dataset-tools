@@ -9,17 +9,48 @@ Run:
     python validate_dataset.py
 """
 
+import argparse
 import json
+import os
 import random
 import statistics
 from pathlib import Path
 
-DATASET_FILE = Path("output/elaina_finetune_dataset.jsonl")
+LANG = os.environ.get("DATASET_LANG", "EN").upper()
+OUTPUT_DIR = Path(f"output-{LANG}")
+DATASET_FILE = OUTPUT_DIR / "elaina_finetune_dataset.jsonl"
+
+
+def set_language(lang: str):
+    global LANG, OUTPUT_DIR, DATASET_FILE
+    LANG = lang.upper()
+    OUTPUT_DIR = Path(f"output-{LANG}")
+    DATASET_FILE = OUTPUT_DIR / "elaina_finetune_dataset.jsonl"
 
 
 def main():
+    parser = argparse.ArgumentParser(description="Validate generated fine-tuning dataset")
+    parser.add_argument("--lang", choices=["EN", "JP", "ID", "en", "jp", "id"], default=None)
+    parser.add_argument("--EN", dest="lang_en", action="store_true", help="Shortcut for --lang EN")
+    parser.add_argument("--JP", dest="lang_jp", action="store_true", help="Shortcut for --lang JP")
+    parser.add_argument("--ID", dest="lang_id", action="store_true", help="Shortcut for --lang ID")
+    args = parser.parse_args()
+
+    if args.lang_jp:
+        target_lang = "JP"
+    elif args.lang_en:
+        target_lang = "EN"
+    elif args.lang_id:
+        target_lang = "ID"
+    elif args.lang:
+        target_lang = args.lang.upper()
+    else:
+        target_lang = os.environ.get("DATASET_LANG", "EN").upper()
+
+    set_language(target_lang)
+
     if not DATASET_FILE.exists():
-        raise SystemExit(f"{DATASET_FILE} not found. Run build_dataset.py first.")
+        raise SystemExit(f"{DATASET_FILE} not found. Run build_dataset.py --{LANG} first.")
 
     records = []
     errors = 0

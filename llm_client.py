@@ -45,26 +45,48 @@ import json
 import os
 import re
 import time
+import warnings
 from collections import deque
 
 from dotenv import load_dotenv
 load_dotenv()
 
-from openai import OpenAI, RateLimitError
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_not_exception_type
+# Filter harmless warning from older openai/pydantic compatibility layer on Python 3.14+
+warnings.filterwarnings("ignore", message=".*Core Pydantic V1 functionality.*")
+
+from openai import (
+    OpenAI,
+    RateLimitError,
+    NotFoundError,
+    AuthenticationError,
+    InternalServerError,
+    APIConnectionError,
+    APITimeoutError,
+)
 
 def _normalize_base_url(url: str) -> str:
     url = url.strip().rstrip("/")
-    if not url.endswith("/v1"):
-        url = f"{url}/v1"
-    return url
+    if url.endswith("/openai") or "googleapis.com" in url or url.endswith("/v1"):
+        return url
+    return f"{url}/v1"
 
 BASE_URL = _normalize_base_url(os.environ.get("LLM_BASE_URL", "http://localhost:8080/v1"))
 API_KEY = os.environ.get("LLM_API_KEY", "sk-local")
-MODEL = os.environ.get("LLM_MODEL", "default")
+
+def _parse_models(raw: str) -> list[str]:
+    raw = raw.strip().strip('"').strip("'")
+    models = [m.strip().strip('"').strip("'") for m in raw.split(",") if m.strip()]
+    return models if models else ["default"]
+
+MODELS = _parse_models(os.environ.get("LLM_MODEL", "default"))
+MODEL = MODELS[0]
 TIMEOUT = float(os.environ.get("LLM_TIMEOUT", "300"))
 
-client = OpenAI(base_url=BASE_URL, api_key=API_KEY, timeout=TIMEOUT)
+try:
+    client = OpenAI(base_url=BASE_URL, api_key=API_KEY, timeout=TIMEOUT)
+except TypeError:
+    import httpx
+    client = OpenAI(base_url=BASE_URL, api_key=API_KEY, http_client=httpx.Client(timeout=TIMEOUT))
 
 # ── Per-call spacing (requests-per-minute style limits) ────────────────────
 _MIN_INTERVAL = float(os.environ.get("LLM_MIN_SECONDS_BETWEEN_CALLS", "0"))
@@ -204,22 +226,40 @@ def _extract_json_block(raw: str):
     return None
 
 
-@retry(
-    stop=stop_after_attempt(3),
-    wait=wait_exponential(multiplier=2, min=2, max=20),
-    retry=retry_if_not_exception_type(RateLimitError),
-)
-def _chat_once(system_prompt: str, user_prompt: str, temperature: float) -> str:
-    """A single raw API call. Automatically retried (short backoff) only for
-    transient errors like timeouts/connection issues. RateLimitError is
-    excluded from this retry -- it's handled separately by chat() below,
-    which knows how to parse the provider's requested wait time."""
+def _is_daily_quota_error(exc: Exception) -> bool:
+    """Check if the error is specifically a daily quota / token limit error."""
+    msg = str(exc).lower()
+
+    wait_seconds = _parse_retry_after_seconds(str(exc))
+    if wait_seconds is not None and wait_seconds > MAX_AUTO_SLEEP_SECONDS:
+        return True
+
+    daily_keywords = [
+        "per day",
+        "per-day",
+        "daily",
+        "requests_per_day",
+        "tokens_per_day",
+        "requests per day",
+        "tokens per day",
+        "tpd limit",
+        "rpd limit",
+        "day limit",
+        "insufficient_quota",
+        "free_tier_requests_per_day",
+        "exceeded your current quota",
+    ]
+    return any(keyword in msg for keyword in daily_keywords)
+
+
+def _chat_single_call(model: str, system_prompt: str, user_prompt: str, temperature: float) -> str:
+    """Single raw API call for a specific model."""
     estimated = _estimate_tokens(system_prompt) + _estimate_tokens(user_prompt) + MAX_OUTPUT_TOKENS
     reservation = _reserve_token_budget(estimated)
     _respect_call_interval()
 
     response = client.chat.completions.create(
-        model=MODEL,
+        model=model,
         temperature=temperature,
         max_tokens=MAX_OUTPUT_TOKENS,
         messages=[
@@ -239,46 +279,99 @@ def _chat_once(system_prompt: str, user_prompt: str, temperature: float) -> str:
 def chat(system_prompt: str, user_prompt: str, temperature: float = 0.4) -> str:
     """Chat call, returns the model's raw text output.
 
-    Handles rate limits (429) intelligently:
-    - If the provider's requested wait is SHORT (<= LLM_MAX_AUTO_SLEEP_SECONDS,
-      default 5 minutes) -> sleep automatically then retry. This handles
-      brief RPM-type limits.
-    - If the wait is LONG (e.g. a daily token limit that only resets in
-      hours) -> raise immediately with a clear message, WITHOUT blocking
-      the terminal for hours. Progress is already safe in the checkpoint;
-      just re-run the same script later to resume.
+    Iterates through MODELS starting from the first model on EVERY call.
+    - If a model is busy/overloaded (e.g. Google API 503 high demand), it retries up to 3 times,
+      then falls back to the next model in the list.
+    - If a model returns 404 (not found / retired), it immediately falls back to the next model.
+    - If a model is rate-limited (429 per-minute limit), it falls back to the next model immediately.
+    - If the error is a DAILY token/quota limit, fallback is halted and the error is raised immediately.
+    - Once any call succeeds, the fallback cycle resets to the first model for subsequent calls.
     """
-    for attempt in range(MAX_RATE_LIMIT_RETRIES):
-        try:
-            return _chat_once(system_prompt, user_prompt, temperature)
-        except RateLimitError as e:
-            wait_seconds = _parse_retry_after_seconds(str(e))
-            if wait_seconds is None:
-                wait_seconds = 30.0  # fallback if the message format isn't recognized
+    last_exception = None
+    total_models = len(MODELS)
 
-            if wait_seconds <= MAX_AUTO_SLEEP_SECONDS:
-                print(
-                    f"[RATE LIMIT] Provider asked us to wait ~{wait_seconds:.0f}s. "
-                    f"Sleeping automatically, then retrying..."
-                )
-                time.sleep(wait_seconds + 2)
-                continue
+    for model_idx, model in enumerate(MODELS):
+        is_last_model = (model_idx == total_models - 1)
+        next_model = MODELS[model_idx + 1] if not is_last_model else None
 
-            minutes = wait_seconds / 60
-            raise RuntimeError(
-                f"Provider rate limit: need to wait ~{minutes:.0f} minutes "
-                f"({minutes / 60:.1f} hours) for the quota to reset. This is "
-                f"likely a DAILY limit (tokens per day), not just a per-minute cap.\n"
-                f"Progress processed so far is SAVED (see the checkpoint in the "
-                f"output/ folder). Wait for the quota to reset, then re-run the "
-                f"same command -- the script will RESUME from where it left off, "
-                f"not start over."
-            ) from e
+        for attempt in range(1, 4):
+            try:
+                return _chat_single_call(model, system_prompt, user_prompt, temperature)
+            except Exception as e:
+                last_exception = e
+
+                # 1. Daily quota limit check: Fallback does NOT apply to daily limit. Stop immediately.
+                if _is_daily_quota_error(e):
+                    wait_seconds = _parse_retry_after_seconds(str(e))
+                    wait_msg = f" (wait ~{wait_seconds / 60:.0f}m)" if wait_seconds else ""
+                    raise RuntimeError(
+                        f"Daily token/quota limit reached on '{model}'{wait_msg}: {e}\n"
+                        f"Progress processed so far is SAVED in the output/ folder. "
+                        f"Please wait for your daily quota to reset before resuming."
+                    ) from e
+
+                # 2. Authentication error: invalid API key, no model will work
+                if isinstance(e, AuthenticationError):
+                    raise
+
+                # 3. Model not found (404) or retired / unavailable
+                if isinstance(e, NotFoundError) or "not found" in str(e).lower() or "not available" in str(e).lower() or "does not exist" in str(e).lower():
+                    if not is_last_model:
+                        print(f"[FALLBACK] Model '{model}' not found or unavailable. Falling back to '{next_model}'...")
+                        break
+                    else:
+                        raise
+
+                # 4. RateLimitError (429) - Short rate limit (RPM/TPM)
+                if isinstance(e, RateLimitError):
+                    wait_seconds = _parse_retry_after_seconds(str(e))
+                    if wait_seconds is None:
+                        wait_seconds = 10.0
+
+                    if not is_last_model:
+                        print(
+                            f"[FALLBACK] Model '{model}' rate-limited / full (wait ~{wait_seconds:.0f}s). "
+                            f"Falling back to '{next_model}'..."
+                        )
+                        break
+                    else:
+                        if wait_seconds <= MAX_AUTO_SLEEP_SECONDS and attempt < MAX_RATE_LIMIT_RETRIES:
+                            print(
+                                f"[RATE LIMIT] Provider asked us to wait ~{wait_seconds:.0f}s. "
+                                f"Sleeping automatically, then retrying ({attempt}/{MAX_RATE_LIMIT_RETRIES})..."
+                            )
+                            time.sleep(wait_seconds + 2)
+                            continue
+                        else:
+                            raise RuntimeError(
+                                f"Still hitting rate limits on '{model}'. Quota or limit exceeded: {e}"
+                            ) from e
+
+                # 5. Overloaded / Busy / Transient server errors (503, 500, timeouts, connection)
+                if attempt < 3:
+                    backoff = 2 ** attempt
+                    print(
+                        f"[RETRY] Model '{model}' is busy or encountered error ({type(e).__name__}: {e}). "
+                        f"Retrying in {backoff}s (attempt {attempt}/3)..."
+                    )
+                    time.sleep(backoff)
+                    continue
+                else:
+                    if not is_last_model:
+                        print(
+                            f"[FALLBACK] Model '{model}' failed after 3 attempts ({type(e).__name__}: {e}). "
+                            f"Falling back to '{next_model}'..."
+                        )
+                        break
+                    else:
+                        raise
 
     raise RuntimeError(
-        f"Still hitting rate limits after {MAX_RATE_LIMIT_RETRIES} attempts. "
-        f"Try again in a bit."
-    )
+        f"All configured models ({', '.join(MODELS)}) failed. Last error: {last_exception}"
+    ) from last_exception
+
+
+_chat_once = chat
 
 
 def chat_json(system_prompt: str, user_prompt: str, temperature: float = 0.3):

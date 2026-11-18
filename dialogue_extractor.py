@@ -12,6 +12,7 @@ Output:
     Each line: {"chapter": "...", "scenario": "...", "user_message": "...", "elaina_response": "..."}
 """
 
+import argparse
 import json
 import os
 from pathlib import Path
@@ -20,19 +21,25 @@ from tqdm import tqdm
 
 from llm_client import chat_json
 
-TEXT_DIR = Path("text")
-OUTPUT_DIR = Path("output")
+LANG = os.environ.get("DATASET_LANG", "EN").upper()
+TEXT_DIR = Path(f"text-{LANG}")
+OUTPUT_DIR = Path(f"output-{LANG}")
 OUTPUT_FILE = OUTPUT_DIR / "raw_dialogue_pairs.jsonl"
+CHECKPOINT_FILE = OUTPUT_DIR / "dialogue_checkpoint.json"
+
+
+def set_language(lang: str):
+    """Dynamically set the active language and target directories."""
+    global LANG, TEXT_DIR, OUTPUT_DIR, OUTPUT_FILE, CHECKPOINT_FILE
+    LANG = lang.upper()
+    TEXT_DIR = Path(f"text-{LANG}")
+    OUTPUT_DIR = Path(f"output-{LANG}")
+    OUTPUT_FILE = OUTPUT_DIR / "raw_dialogue_pairs.jsonl"
+    CHECKPOINT_FILE = OUTPUT_DIR / "dialogue_checkpoint.json"
+
 
 # How many characters of chapter text to process per call.
-# Set to 0 to send the ENTIRE chapter in a single call (ideal for Qwen 3.6 / 262k context).
-# Or set to a positive integer (e.g. 35000) to process in larger scene-preserving chunks.
 DIALOGUE_CHUNK_CHARS = int(os.environ.get("DIALOGUE_CHUNK_CHARS", "35000"))
-
-# Checkpoint: list of chapter names that are FULLY done (all their chunks
-# processed). If the script stops mid-run, the next run resumes from the
-# unfinished chapters -- without duplicating lines in raw_dialogue_pairs.jsonl.
-CHECKPOINT_FILE = OUTPUT_DIR / "dialogue_checkpoint.json"
 
 
 def load_checkpoint() -> set:
@@ -53,7 +60,8 @@ def save_checkpoint(completed_chapters: set):
         encoding="utf-8",
     )
 
-SYSTEM_PROMPT = """You are helping prepare chatbot fine-tuning data for the character Elaina, \
+
+SYSTEM_PROMPT_EN = """You are helping prepare chatbot fine-tuning data for the character Elaina, \
 from the novel "Majo no Tabitabi / The Journey of Elaina".
 
 From the given chapter excerpt, find ALL scenes where Elaina speaks (either \
@@ -73,11 +81,48 @@ scenes that don't involve Elaina speaking/reacting.
 Reply with ONLY a JSON array, no other text, no markdown code fence.
 """
 
+SYSTEM_PROMPT_JP = """あなたは小説『魔女の旅々』の主人公・灰の魔女イレイナのチャットボット用ファインチューニングデータを準備するアシスタントです。
+
+提示された章の抜粋から、イレイナが話しているシーン（直接の会話、または彼女の性格・個性が表れているモノローグ）をすべて抽出してください。
+各シーンについて、以下の構造を持つオブジェクトを作成してください：
+
+{
+  "scenario": "このシーンの状況や場面設定の簡潔な要約（日本語で1〜2文）",
+  "user_message": "イレイナの返答を引き出す会話相手の発言や問いかけ（相手がいない場合は状況のナレーション／問いかけ、自然な日本語で記述）",
+  "elaina_response": "イレイナの返答。抜粋の文章に基づき、イレイナの口調（一人称「私」、丁寧ながらも少し毒舌・ナルシストで自信家な語尾や特徴）を忠実に保った日本語"
+}
+
+これらのエントリーを含むJSON配列を返してください。イレイナが発言・反応していない抜粋の場合は空配列 [] を返してください。
+余計な解説やマークダウンは含めず、有効なJSON配列のみを出力してください。
+"""
+
+SYSTEM_PROMPT_ID = """Kamu membantu menyiapkan data fine-tuning chatbot untuk karakter Elaina dari novel "Majo no Tabitabi / The Journey of Elaina".
+
+Dari kutipan bab yang diberikan, temukan SEMUA adegan di mana Elaina berbicara (dialog langsung atau monolog batin yang menunjukkan kepribadiannya).
+Untuk setiap adegan, buat satu entri dengan struktur:
+
+{
+  "scenario": "ringkasan singkat situasi/latar adegan (1-2 kalimat dalam bahasa Indonesia)",
+  "user_message": "pesan/pertanyaan dari lawan bicara Elaina (atau situasi yang memicu reaksinya) dalam bahasa Indonesia",
+  "elaina_response": "jawaban Elaina dalam bahasa Indonesia, mempertahankan kepribadian, nada bicara, dan gaya khasnya seakurat mungkin"
+}
+
+Balas dengan HANYA array JSON, tanpa teks pembuka/penutup.
+"""
+
+
+def get_system_prompt() -> str:
+    if LANG == "JP":
+        return SYSTEM_PROMPT_JP
+    if LANG == "ID":
+        return SYSTEM_PROMPT_ID
+    return SYSTEM_PROMPT_EN
+
 
 def main():
     chapter_files = sorted(TEXT_DIR.glob("chapter_*.txt"))
     if not chapter_files:
-        raise SystemExit("No chapter files found in text/. Run extract_text.py first.")
+        raise SystemExit(f"No chapter files found in {TEXT_DIR}/. Run extract_text.py --{LANG} first.")
 
     OUTPUT_DIR.mkdir(exist_ok=True)
     completed = load_checkpoint()
@@ -88,9 +133,9 @@ def main():
         if stale:
             print(
                 f"[WARN] Checkpoint references {len(stale)} chapter(s) that no longer "
-                f"exist in text/ (the chapter list may have changed). Reprocessing ALL "
+                f"exist in {TEXT_DIR}/ (the chapter list may have changed). Reprocessing ALL "
                 f"chapters from scratch for consistency. Delete "
-                f"output/dialogue_checkpoint.json and output/raw_dialogue_pairs.jsonl "
+                f"{CHECKPOINT_FILE} and {OUTPUT_FILE} "
                 f"first if this isn't what you want."
             )
             completed = set()
@@ -135,7 +180,7 @@ def main():
                 if len(chunk.strip()) < 200:
                     continue
                 try:
-                    pairs = chat_json(SYSTEM_PROMPT, chunk)
+                    pairs = chat_json(get_system_prompt(), chunk)
                 except ValueError as e:
                     print(f"[WARN] Skipping a chunk in {chap_path.name}: {e}")
                     continue
@@ -174,4 +219,23 @@ def main():
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Extract dialogue pairs from novel chapters")
+    parser.add_argument("--lang", choices=["EN", "JP", "ID", "en", "jp", "id"], default=None)
+    parser.add_argument("--EN", dest="lang_en", action="store_true", help="Shortcut for --lang EN")
+    parser.add_argument("--JP", dest="lang_jp", action="store_true", help="Shortcut for --lang JP")
+    parser.add_argument("--ID", dest="lang_id", action="store_true", help="Shortcut for --lang ID")
+    args = parser.parse_args()
+
+    if args.lang_jp:
+        target_lang = "JP"
+    elif args.lang_en:
+        target_lang = "EN"
+    elif args.lang_id:
+        target_lang = "ID"
+    elif args.lang:
+        target_lang = args.lang.upper()
+    else:
+        target_lang = os.environ.get("DATASET_LANG", "EN").upper()
+
+    set_language(target_lang)
     main()

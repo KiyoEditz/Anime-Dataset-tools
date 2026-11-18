@@ -1,0 +1,62 @@
+{
+  "train": {
+    "rows": 24035,
+    "user_chars": {
+      "mean": 81.9,
+      "p50": 60,
+      "p95": 231,
+      "max": 1214
+    },
+    "response_chars": {
+      "mean": 80.3,
+      "p50": 49,
+      "p95": 250,
+      "max": 1565
+    },
+    "system_chars": {
+      "short_rows": 24035,
+      "long_rows": 0
+    },
+    "by_lang": {
+      "en": 8332,
+      "id": 8207,
+      "jp": 7496
+    },
+    "by_kind": {
+      "dialogue": 20235,
+      "scene": 1115,
+      "multiturn": 2445,
+      "synthetic": 240
+    },
+    "estimate_tokens_chars_over_3_6": 4541469
+  },
+  "val": {
+    "rows": 1767,
+    "user_chars": {
+      "mean": 78.1,
+      "p50": 61,
+      "p95": 211,
+      "max": 650
+    },
+    "response_chars": {
+      "mean": 67.1,
+      "p50": 44,
+      "p95": 210,
+      "max": 615
+    },
+    "system_chars": {
+      "short_rows": 1767,
+      "long_rows": 0
+    },
+    "by_lang": {
+      "en": 762,
+      "id": 532,
+      "jp": 473
+    },
+    "by_kind": {
+      "dialogue": 1658,
+      "scene": 109
+    },
+    "estimate_tokens_chars_over_3_6": 330395
+  }
+}
