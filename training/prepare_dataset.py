@@ -227,6 +227,86 @@ def source_specs(args) -> list[tuple[str, list[Path]]]:
 # stage: load
 # ---------------------------------------------------------------------------
 
+_META_NOISE_RE = re.compile(
+    r"^\((?:Not Elaina|No direct response|No spoken response)\b", re.IGNORECASE
+)
+_NARR_INNER_LINE_RE = re.compile(r"^Narration\s*\(inner\)\s*:\s*(.+)$", re.DOTALL | re.IGNORECASE)
+_NARR_LINE_RE = re.compile(r"^Narration\s*:\s*(.+)$", re.DOTALL | re.IGNORECASE)
+_INNER_PAREN_COLON_RE = re.compile(
+    r"^\((?:Internally|Thinking|Thinks|Inner monologue|Internal|Thought|Thoughts)\s*:\s*([^)]+)\)\s*",
+    re.IGNORECASE,
+)
+_INNER_PAREN_LABEL_RE = re.compile(
+    r"^\((?:Internally|Thinking|Thinks|Inner monologue|Internal|Thought|Thoughts)\)\s*(.+)$",
+    re.DOTALL | re.IGNORECASE,
+)
+_NARR_PAREN_COLON_RE = re.compile(r"^\(Narration\s*:\s*([^)]+)\)\s*", re.IGNORECASE)
+_NARR_PAREN_LABEL_RE = re.compile(r"^\(Narration\)\s*(.+)$", re.DOTALL | re.IGNORECASE)
+_OUT_LOUD_RE = re.compile(r"\(Out loud\)\s*", re.IGNORECASE)
+_LEADING_PAREN_RE = re.compile(r"^\(([^()]{2,300})\)\s*")
+
+
+def _strip_outer_quotes(s: str) -> str:
+    s = s.strip()
+    if len(s) >= 2 and ((s[0] == '"' and s[-1] == '"') or (s[0] == "“" and s[-1] == "”")):
+        return s[1:-1].strip()
+    return s
+
+
+def clean_response_format(text: str) -> str | None:
+    """Normalize extraction narration/parenthetical tags to *action* / *'thought'* RP style."""
+    s = text.strip()
+    if not s or _META_NOISE_RE.match(s):
+        return None
+
+    m = _NARR_INNER_LINE_RE.match(s)
+    if m:
+        return f"*'{_strip_outer_quotes(m.group(1))}'*"
+
+    m = _NARR_LINE_RE.match(s)
+    if m:
+        return f"*{_strip_outer_quotes(m.group(1))}*"
+
+    s = _OUT_LOUD_RE.sub("", s).strip()
+
+    # Convert inline/leading (Inner monologue) / (Thinking: ...) / (Narration: ...)
+    while True:
+        prev = s
+        m = _INNER_PAREN_COLON_RE.match(s)
+        if m:
+            rest = s[m.end():].strip()
+            inner = f"*'{_strip_outer_quotes(m.group(1))}'*"
+            s = f"{inner} {rest}".strip() if rest else inner
+            continue
+        m = _INNER_PAREN_LABEL_RE.match(s)
+        if m:
+            s = f"*'{_strip_outer_quotes(m.group(1))}'*"
+            continue
+        m = _NARR_PAREN_COLON_RE.match(s)
+        if m:
+            rest = s[m.end():].strip()
+            narr = f"*{_strip_outer_quotes(m.group(1))}*"
+            s = f"{narr} {rest}".strip() if rest else narr
+            continue
+        m = _NARR_PAREN_LABEL_RE.match(s)
+        if m:
+            s = f"*{_strip_outer_quotes(m.group(1))}*"
+            continue
+        m = _LEADING_PAREN_RE.match(s)
+        if m:
+            rest = s[m.end():].strip()
+            action = f"*{m.group(1).strip()}*"
+            s = f"{action} {rest}".strip() if rest else action
+            continue
+        if s == prev:
+            break
+
+    # Also clean any mid-string (Narration: ...) or (Narration (inner): ...)
+    s = re.sub(r"\(Narration\s*\(inner\)\s*:\s*([^)]+)\)", lambda x: f"*'{_strip_outer_quotes(x.group(1))}'*", s, flags=re.IGNORECASE)
+    s = re.sub(r"\(Narration\s*:\s*([^)]+)\)", lambda x: f"*{_strip_outer_quotes(x.group(1))}*", s, flags=re.IGNORECASE)
+    return s.strip() or None
+
+
 def load_records(slots: list[tuple[str, list[Path]]], fallback_out_dir: Path | None = None) -> tuple[list[Record], dict]:
     records: list[Record] = []
     report = {"slots": {}, "missing_files": [], "dropped_malformed": 0}
@@ -246,7 +326,8 @@ def load_records(slots: list[tuple[str, list[Path]]], fallback_out_dir: Path | N
             kept = 0
             for i, row in enumerate(rows):
                 user = str(row.get("user_message", "")).strip()
-                response = str(row.get("elaina_response", "")).strip()
+                raw_response = str(row.get("elaina_response", "")).strip()
+                response = clean_response_format(raw_response) if raw_response else None
                 if not user or not response:
                     report["dropped_malformed"] += 1
                     continue
