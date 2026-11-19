@@ -308,10 +308,10 @@ Check that the token has the `write` role and is not expired:
 def _(hf_user, mo):
     _user = hf_user or "your-username"
     repo_widgets = {
-        "dataset": mo.ui.text(value=f"{_user}/elaina-gemma4-dataset", label="dataset repo"),
-        "adapter": mo.ui.text(value=f"{_user}/elaina-gemma4-31b-lora", label="LoRA adapter repo"),
-        "merged": mo.ui.text(value=f"{_user}/elaina-gemma4-31b", label="merged bf16 repo"),
-        "gguf": mo.ui.text(value=f"{_user}/elaina-gemma4-31b-GGUF", label="GGUF repo"),
+        "dataset": mo.ui.text(value=f"{_user}/Elaina-Dataset", label="dataset repo"),
+        "adapter": mo.ui.text(value=f"{_user}/Elaina-gemma-4-31B-v0.1-lora", label="LoRA adapter repo"),
+        "merged": mo.ui.text(value=f"{_user}/Elaina-gemma-4-31B-v0.1", label="merged bf16 repo"),
+        "gguf": mo.ui.text(value=f"{_user}/Elaina-gemma-4-31B-v0.1-GGUF", label="GGUF repo"),
     }
     mo.vstack([mo.md("## Repositories (all private)"), *repo_widgets.values()])
     return (repo_widgets,)

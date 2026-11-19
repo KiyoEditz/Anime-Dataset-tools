@@ -140,14 +140,20 @@ def step_hf_login_and_repos(cfg: dict) -> tuple:
             "Set HF_TOKEN in .env or run `huggingface-cli login`."
         )
 
-    suffix = "-smoke" if cfg["smoke"] else ""
-    base_name = "elaina-gemma4-e2b" if cfg["smoke"] else "elaina-gemma4-31b"
-    repos = {
-        "dataset": os.environ.get("ELAINA_DATASET_REPO", f"{user}/elaina-gemma4-dataset"),
-        "adapter": os.environ.get("ELAINA_ADAPTER_REPO", f"{user}/{base_name}{suffix}-lora"),
-        "merged": os.environ.get("ELAINA_MERGED_REPO", f"{user}/{base_name}{suffix}"),
-        "gguf": os.environ.get("ELAINA_GGUF_REPO", f"{user}/{base_name}{suffix}-GGUF"),
-    }
+    if cfg["smoke"]:
+        repos = {
+            "dataset": os.environ.get("ELAINA_DATASET_REPO", f"{user}/Elaina-Dataset"),
+            "adapter": os.environ.get("ELAINA_ADAPTER_REPO", f"{user}/elaina-gemma4-e2b-smoke-lora"),
+            "merged": os.environ.get("ELAINA_MERGED_REPO", f"{user}/elaina-gemma4-e2b-smoke"),
+            "gguf": os.environ.get("ELAINA_GGUF_REPO", f"{user}/elaina-gemma4-e2b-smoke-GGUF"),
+        }
+    else:
+        repos = {
+            "dataset": os.environ.get("ELAINA_DATASET_REPO", f"{user}/Elaina-Dataset"),
+            "adapter": os.environ.get("ELAINA_ADAPTER_REPO", f"{user}/Elaina-gemma-4-31B-v0.1-lora"),
+            "merged": os.environ.get("ELAINA_MERGED_REPO", f"{user}/Elaina-gemma-4-31B-v0.1"),
+            "gguf": os.environ.get("ELAINA_GGUF_REPO", f"{user}/Elaina-gemma-4-31B-v0.1-GGUF"),
+        }
     print(f"  user: {user} | mode: {cfg['mode']}")
     for k, v in repos.items():
         print(f"  {k:<8}: {v}")
