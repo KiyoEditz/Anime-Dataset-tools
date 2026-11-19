@@ -78,7 +78,7 @@ def _():
                        "Q4_K_M", "Q5_K_S", "Q5_K_M", "Q6_K", "Q8_0"],
         "SKIP_MERGE": False,
         "MAX_SHARD": "4GB",
-        "WORKDIR": os.environ.get("ELAINA_WORKDIR", "/root/work"),
+        "WORKDIR": os.environ.get("ELAINA_WORKDIR", "./work"),
         "REPO_SLUG": os.environ.get("ELAINA_REPO_SLUG", "KiyoEditz/elaina-dataset-tool"),
         "REPO_BRANCH": os.environ.get("ELAINA_REPO_BRANCH", "main"),
         "LIB_FILE": "training/elaina_train_lib.py",
@@ -86,7 +86,7 @@ def _():
         "LLAMA_CPP_REVISION": os.environ.get("ELAINA_LLAMA_CPP_REV", "master"),
         "DATASET_DIR": os.environ.get("ELAINA_DATASET_DIR", "training/out"),
     }
-    CFG["OUT_DIR"] = Path(CFG["WORKDIR"])
+    CFG["OUT_DIR"] = Path(CFG["WORKDIR"]).resolve()
     return CFG, MODE, Path, SMOKE, importlib, json, math, mo, os, re, shutil, sys, time
 
 
@@ -194,10 +194,11 @@ resume later; the Hub holds everything that finished.
 # ---------------------------------------------------------------------------
 
 @app.cell
-def _(CFG, lib, mo, os):
+def _(CFG, Path, lib, mo, os):
     # Only measure paths where heavy artefacts are actually stored for blocking gate.
     # /tmp is often a small RAM-backed tmpfs in cloud containers and must not falsely block training.
-    _paths = [CFG["WORKDIR"]]
+    Path(CFG["WORKDIR"]).mkdir(parents=True, exist_ok=True)
+    _paths = [str(Path(CFG["WORKDIR"]).resolve())]
     if os.environ.get("HF_HOME"):
         _paths.append(os.environ["HF_HOME"])
     gate = lib.env_gate(_paths)
@@ -823,43 +824,31 @@ def _(CFG, gate, load_button, mo, model_info, time):
         _source = model_info["id"]
         import torch as _torch
 
+        # Load directly in full bf16 on cuda:0 via transformers (avoid Unsloth FastModel,
+        # which can leave tensors on meta device / collide with gradient checkpointing on 31B VLM).
+        _device_map = {"": 0} if _torch.cuda.is_available() else "auto"
+
         try:
-            from unsloth import FastModel as _FastModel
+            from transformers import AutoModelForImageTextToText as _AutoVLM
 
-            _loader = "FastModel (bf16)"
-            base_model, _ = _FastModel.from_pretrained(
-                model_name=_source,
-                max_seq_length=CFG["MAX_SEQ"],
-                load_in_4bit=False,
-                load_in_8bit=False,
-                full_finetuning=False,
-                dtype=_torch.bfloat16,
+            _loader = "AutoModelForImageTextToText (bf16, cuda:0)"
+            base_model = _AutoVLM.from_pretrained(
+                _source,
+                torch_dtype=_torch.bfloat16,
+                device_map=_device_map,
             )
-        except Exception as exc:
-            _errors.append(f"FastModel: {type(exc).__name__}: {exc}")
-
-        if base_model is None:
-            try:
-                from transformers import AutoModelForImageTextToText as _AutoVLM
-
-                _loader = "AutoModelForImageTextToText (bf16)"
-                base_model = _AutoVLM.from_pretrained(
-                    _source,
-                    torch_dtype=_torch.bfloat16,
-                    device_map="auto",
-                )
-            except Exception as exc2:
-                _errors.append(f"AutoModelForImageTextToText: {type(exc2).__name__}: {exc2}")
+        except Exception as exc2:
+            _errors.append(f"AutoModelForImageTextToText: {type(exc2).__name__}: {exc2}")
 
         if base_model is None:
             try:
                 from transformers import AutoModelForCausalLM as _AutoCLM
 
-                _loader = "AutoModelForCausalLM (bf16)"
+                _loader = "AutoModelForCausalLM (bf16, cuda:0)"
                 base_model = _AutoCLM.from_pretrained(
                     _source,
                     torch_dtype=_torch.bfloat16,
-                    device_map="auto",
+                    device_map=_device_map,
                 )
             except Exception as exc3:
                 _errors.append(f"AutoModelForCausalLM: {type(exc3).__name__}: {exc3}")
@@ -870,6 +859,12 @@ def _(CFG, gate, load_button, mo, model_info, time):
                 raise RuntimeError(f"Expected bfloat16 base model parameters, got {_p0.dtype}")
             if getattr(base_model, "is_loaded_in_4bit", False):
                 raise RuntimeError("Base model was loaded in 4-bit despite LOAD_IN_4BIT=False!")
+            _meta_params = [n for n, p in base_model.named_parameters() if p.device.type == "meta"]
+            if _meta_params:
+                raise RuntimeError(
+                    f"Model has {len(_meta_params)} parameter(s) on 'meta' device (e.g. {_meta_params[:3]}). "
+                    "Ensure the entire model fits on cuda:0 without CPU/meta offloading."
+                )
 
         load_report = {
             "ok": base_model is not None,
@@ -922,33 +917,18 @@ def _(CFG, base_model, lora_button, mo):
                     _p.requires_grad = False
                     _frozen_visual += _p.numel()
 
-            try:
-                from peft import LoraConfig as _LoraConfig, get_peft_model as _get_peft_model
+            from peft import LoraConfig as _LoraConfig, get_peft_model as _get_peft_model
 
-                model = _get_peft_model(base_model, _LoraConfig(
-                    r=CFG["LORA_R"], lora_alpha=CFG["LORA_ALPHA"],
-                    lora_dropout=CFG["LORA_DROPOUT"],
-                    target_modules=CFG["TARGET_MODULES"],
-                    bias="none", task_type="CAUSAL_LM",
-                ))
-                _how = "peft (regex language-only)"
-            except Exception:
-                from unsloth import FastModel as _FM
+            if hasattr(base_model, "enable_input_require_grads"):
+                base_model.enable_input_require_grads()
 
-                model = _FM.get_peft_model(
-                    base_model,
-                    finetune_vision_layers=False,
-                    finetune_language_layers=True,
-                    finetune_attention_modules=True,
-                    finetune_mlp_modules=True,
-                    r=CFG["LORA_R"], lora_alpha=CFG["LORA_ALPHA"],
-                    lora_dropout=CFG["LORA_DROPOUT"],
-                    target_modules=["q_proj", "k_proj", "v_proj", "o_proj",
-                                    "gate_proj", "up_proj", "down_proj"],
-                    use_gradient_checkpointing="unsloth",
-                    random_state=CFG["SEED"],
-                )
-                _how = "unsloth (vision frozen)"
+            model = _get_peft_model(base_model, _LoraConfig(
+                r=CFG["LORA_R"], lora_alpha=CFG["LORA_ALPHA"],
+                lora_dropout=CFG["LORA_DROPOUT"],
+                target_modules=CFG["TARGET_MODULES"],
+                bias="none", task_type="CAUSAL_LM",
+            ))
+            _how = "peft (regex language-only)"
 
             # Re-verify and enforce vision freeze after PEFT/Unsloth wrapping
             for _n, _p in model.named_parameters():
