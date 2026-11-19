@@ -1,9 +1,9 @@
 {
-  "created": "2026-11-18T23:15:29+00:00",
+  "created": "2026-11-19T10:48:59+00:00",
   "seed": 42,
   "val_frac": 0.06,
   "params": {
-    "min_response_chars": 8,
+    "min_response_chars": 5,
     "max_response_chars": 1500,
     "min_user_chars": 2,
     "max_user_chars": 800,
@@ -18,24 +18,24 @@
   },
   "counts": {
     "loaded": 36496,
-    "after_length_filter": 32732,
-    "after_exact_dedup": 29182,
-    "after_fuzzy_dedup": 29116,
-    "train": 23988,
-    "val": 1825,
+    "after_length_filter": 35045,
+    "after_exact_dedup": 30004,
+    "after_fuzzy_dedup": 29938,
+    "train": 24723,
+    "val": 1796,
     "by_lang": {
-      "en": 8342,
-      "id": 8179,
-      "jp": 7467
+      "en": 8414,
+      "id": 8287,
+      "jp": 8022
     },
     "dropped": {
       "length": {
-        "response_length": 3754,
-        "user_length": 10
+        "response_length": 1440,
+        "user_length": 11
       },
       "exact": {
-        "exact_response": 2836,
-        "exact_pair": 714
+        "exact_response": 4303,
+        "exact_pair": 738
       },
       "fuzzy": {
         "fuzzy": 66
@@ -671,6 +671,7 @@
         "chapter_0206.txt",
         "chapter_0207.txt",
         "chapter_0208.txt",
+        "chapter_0209.txt",
         "chapter_0210.txt",
         "chapter_0211.txt",
         "chapter_0212.txt",
@@ -995,6 +996,7 @@
         "chapter_0117.txt",
         "chapter_0118.txt",
         "chapter_0119.txt",
+        "chapter_0120.txt",
         "chapter_0122.txt",
         "chapter_0123.txt",
         "chapter_0124.txt",
@@ -1018,6 +1020,7 @@
         "chapter_0149.txt",
         "chapter_0150.txt",
         "chapter_0152.txt",
+        "chapter_0153.txt",
         "chapter_0154.txt",
         "chapter_0155.txt",
         "chapter_0156.txt",
@@ -1061,6 +1064,7 @@
         "chapter_0206.txt",
         "chapter_0207.txt",
         "chapter_0208.txt",
+        "chapter_0209.txt",
         "chapter_0210.txt",
         "chapter_0211.txt",
         "chapter_0212.txt",
@@ -1075,6 +1079,7 @@
         "chapter_0225.txt",
         "chapter_0227.txt",
         "chapter_0229.txt",
+        "chapter_0230.txt",
         "chapter_0231.txt",
         "chapter_0232.txt",
         "chapter_0233.txt",
@@ -1319,7 +1324,6 @@
         "chapter_0192.txt",
         "chapter_0199.txt",
         "chapter_0202.txt",
-        "chapter_0209.txt",
         "chapter_0214.txt",
         "chapter_0226.txt",
         "chapter_0297.txt",
@@ -1346,7 +1350,6 @@
         "chapter_0192.txt",
         "chapter_0199.txt",
         "chapter_0202.txt",
-        "chapter_0209.txt",
         "chapter_0214.txt",
         "chapter_0226.txt",
         "chapter_0297.txt",
@@ -1393,20 +1396,20 @@
   },
   "files": {
     "train.jsonl": {
-      "sha256": "37dcb5d9c6230a0751d5452bee3b578ac951694558d5f9eecd58404e6a2e72b8",
-      "bytes": 24755271
+      "sha256": "a41e9c5a060d929cd3197696b72e3c104f44ae095c3289415b163ec5e07e6bf5",
+      "bytes": 25492238
     },
     "val.jsonl": {
-      "sha256": "6c155745749a242e5c8ce5158ef7ab3212e81180e8c81a13018be25e2065be82",
-      "bytes": 1791458
+      "sha256": "43d874afc70da19661a3b0eae9bd4accde03d5af448d47da29385d8189a225ab",
+      "bytes": 1759793
     },
     "train_meta.jsonl": {
-      "sha256": "5b18fbea3d3a6ea3a08bb1b679ac390080777b052fd5651e2abb7702d7ea55f2",
-      "bytes": 3281620
+      "sha256": "871bdf8d559907cb792db9f814bc5a06bb0b064b2ac07334550f1313c8a0bb33",
+      "bytes": 3381987
     },
     "val_meta.jsonl": {
-      "sha256": "f9bb9d32822b1ffda4d7d195154c79453707ec3b90d9137ba63de81b7b768140",
-      "bytes": 247776
+      "sha256": "7224adb2deca2de6cd38217e6e08381c53fa455c8eca973b3254d9d216d3d822",
+      "bytes": 243876
     }
   }
 }

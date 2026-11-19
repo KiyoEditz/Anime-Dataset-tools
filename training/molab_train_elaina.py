@@ -313,7 +313,7 @@ def _(hf_user, mo):
         "merged": mo.ui.text(value=f"{_user}/Elaina-gemma-4-31B-v0.1", label="merged bf16 repo"),
         "gguf": mo.ui.text(value=f"{_user}/Elaina-gemma-4-31B-v0.1-GGUF", label="GGUF repo"),
     }
-    mo.vstack([mo.md("## Repositories (all private)"), *repo_widgets.values()])
+    mo.vstack([mo.md("## Repositories (public models)"), *repo_widgets.values()])
     return (repo_widgets,)
 
 
@@ -1138,7 +1138,7 @@ def _(CFG, gate, lib, lora_report, mo, model, repos, tokenizer, train_ds, val_ds
             report_to="none",
             push_to_hub=True,
             hub_model_id=repos["adapter"],
-            hub_private_repo=True,
+            hub_private_repo=False,
             hub_strategy="all_checkpoints",
             seed=CFG["SEED"],
             remove_unused_columns=False,
@@ -1484,7 +1484,7 @@ lr={CFG["LR"]}, {CFG["EPOCHS"]} epoch(s)) on the chapter-held-out Elaina dataset
 Load with `PeftModel.from_pretrained(base, this_repo)`.
 """, encoding="utf-8")
 
-        hf_api.create_repo(repos["adapter"], private=True, exist_ok=True)
+        hf_api.create_repo(repos["adapter"], private=False, exist_ok=True)
         hf_api.upload_folder(folder_path=str(_local), repo_id=repos["adapter"])
         adapter_report = {
             "ok": lib.hub_file_ok(hf_api, repos["adapter"], "adapter_config.json"),
@@ -1555,7 +1555,7 @@ def _(CFG, Path, drop_cache, hf_api, lib, merge_button, mo, model, model_info, r
         elif hasattr(model, "save_pretrained_merged"):
             _how = "unsloth save_pretrained_merged"
             model.save_pretrained_merged(str(_tmp), tokenizer, save_method="merged_16bit")
-            hf_api.create_repo(repos["merged"], private=True, exist_ok=True)
+            hf_api.create_repo(repos["merged"], private=False, exist_ok=True)
             _uploaded = []
             for _f in sorted(_tmp.iterdir()):
                 if not _f.is_file():

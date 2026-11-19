@@ -55,7 +55,7 @@ from pathlib import Path
 # defaults (mirror build_dataset.py where the semantics are the same)
 # ---------------------------------------------------------------------------
 
-MIN_RESPONSE_CHARS = 8      # build_dataset.py used 5; 8 keeps "Shoot." but drops noise
+MIN_RESPONSE_CHARS = 5      # matches build_dataset.py; keeps short JP/ID/EN replies
 MAX_RESPONSE_CHARS = 1500
 MIN_USER_CHARS = 2
 MAX_USER_CHARS = 800

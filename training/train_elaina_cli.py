@@ -99,6 +99,7 @@ def build_cfg(args) -> dict:
         "OUT_DIR": workdir,
         "DATASET_DIR": os.environ.get("ELAINA_DATASET_DIR", "training/out"),
         "LLAMA_CPP_REVISION": os.environ.get("ELAINA_LLAMA_CPP_REV", "master"),
+        "PRIVATE": bool(getattr(args, "private", False) or os.environ.get("ELAINA_PRIVATE", "0") == "1"),
     }
 
 
@@ -370,7 +371,7 @@ def step_tokenize_and_train(cfg: dict, model, tokenizer, parts: dict, train_raw:
         report_to="none",
         push_to_hub=True,
         hub_model_id=repos["adapter"],
-        hub_private_repo=True,
+        hub_private_repo=cfg["PRIVATE"],
         hub_strategy="all_checkpoints",
         seed=cfg["SEED"],
         remove_unused_columns=False,
@@ -421,7 +422,8 @@ def step_tokenize_and_train(cfg: dict, model, tokenizer, parts: dict, train_raw:
 
 def step_export_and_gguf(cfg: dict, hf_api, model, tokenizer, repos: dict, skip_merge: bool, skip_gguf: bool):
     print("\n=== [7/8] Push Adapter & Merge bf16 ===")
-    hf_api.create_repo(repos["adapter"], repo_type="model", private=True, exist_ok=True)
+    hf_api.create_repo(repos["adapter"], repo_type="model", private=cfg["PRIVATE"], exist_ok=True)
+    hf_api.update_repo_settings(repo_id=repos["adapter"], repo_type="model", private=cfg["PRIVATE"])
     adapter_dir = cfg["OUT_DIR"] / "adapter_final"
     model.save_pretrained(str(adapter_dir))
     tokenizer.save_pretrained(str(adapter_dir))
@@ -429,13 +431,14 @@ def step_export_and_gguf(cfg: dict, hf_api, model, tokenizer, repos: dict, skip_
     if manifest_p.exists():
         shutil.copy2(manifest_p, adapter_dir / "training_run_manifest.json")
     hf_api.upload_folder(folder_path=str(adapter_dir), repo_id=repos["adapter"], repo_type="model")
-    print(f"  adapter pushed -> {repos['adapter']}")
+    print(f"  adapter pushed -> {repos['adapter']} (private={cfg['PRIVATE']})")
 
     if skip_merge:
         print("  --skip-merge set; stopping before merge/GGUF.")
         return
 
-    hf_api.create_repo(repos["merged"], repo_type="model", private=True, exist_ok=True)
+    hf_api.create_repo(repos["merged"], repo_type="model", private=cfg["PRIVATE"], exist_ok=True)
+    hf_api.update_repo_settings(repo_id=repos["merged"], repo_type="model", private=cfg["PRIVATE"])
     merged_dir = cfg["OUT_DIR"] / "merged_tmp"
     if merged_dir.exists():
         shutil.rmtree(merged_dir, ignore_errors=True)
@@ -477,11 +480,44 @@ def step_export_and_gguf(cfg: dict, hf_api, model, tokenizer, repos: dict, skip_
     ]
     if cfg["LLAMA_CPP_REVISION"] != "master":
         cmd.extend(["--revision", cfg["LLAMA_CPP_REVISION"]])
+    if cfg["PRIVATE"]:
+        cmd.append("--private")
     rc = lib.run_logged(cmd, logger=print)
     shutil.rmtree(dl_merged, ignore_errors=True)
     if rc != 0:
         raise SystemExit(f"gguf_convert.py failed with exit code {rc}")
     print(f"  GGUF (+mmproj) pushed -> {repos['gguf']}")
+
+
+def load_trained_adapter_for_export(cfg: dict, repos: dict):
+    """Load base bf16 model + trained LoRA adapter (local adapter_final or HF Hub) for --export-only."""
+    import torch
+    from peft import PeftModel
+    from transformers import AutoModelForCausalLM, AutoModelForImageTextToText, AutoProcessor, AutoTokenizer
+
+    adapter_src = cfg["OUT_DIR"] / "adapter_final"
+    adapter_id = str(adapter_src) if (adapter_src / "adapter_config.json").exists() else repos["adapter"]
+    print(f"\n=== [Export-Only] Loading base {cfg['MODEL_ID']} + adapter {adapter_id} ===")
+
+    tokenizer = AutoTokenizer.from_pretrained(cfg["MODEL_ID"])
+    if getattr(tokenizer, "chat_template", None) is None:
+        proc = AutoProcessor.from_pretrained(cfg["MODEL_ID"])
+        if getattr(proc, "chat_template", None):
+            tokenizer.chat_template = proc.chat_template
+    if tokenizer.pad_token_id is None:
+        tokenizer.pad_token = tokenizer.eos_token
+
+    device_map = {"": 0} if torch.cuda.is_available() else "auto"
+    try:
+        base_model = AutoModelForImageTextToText.from_pretrained(
+            cfg["MODEL_ID"], torch_dtype=torch.bfloat16, device_map=device_map
+        )
+    except Exception:
+        base_model = AutoModelForCausalLM.from_pretrained(
+            cfg["MODEL_ID"], torch_dtype=torch.bfloat16, device_map=device_map
+        )
+    model = PeftModel.from_pretrained(base_model, adapter_id)
+    return model, tokenizer
 
 
 def main() -> int:
@@ -492,6 +528,8 @@ def main() -> int:
     p.add_argument("--mode", choices=["smoke", "full"], help="override ELAINA_MODE")
     p.add_argument("--workdir", help="override ELAINA_WORKDIR (default: ./work)")
     p.add_argument("--quants", help="comma-separated GGUF quants (e.g. Q4_K_M,Q6_K)")
+    p.add_argument("--private", action="store_true", help="make HF model repos private (default: public)")
+    p.add_argument("--export-only", action="store_true", help="skip training; load trained adapter and run merge + GGUF")
     p.add_argument("--skip-merge", action="store_true", help="push adapter only, skip merged bf16 & GGUF")
     p.add_argument("--skip-gguf", action="store_true", help="skip GGUF conversion after merge")
     args = p.parse_args()
@@ -499,10 +537,13 @@ def main() -> int:
     cfg = build_cfg(args)
     step_env_gate(cfg)
     hf_api, _user, repos = step_hf_login_and_repos(cfg)
-    train_raw, val_raw, data_info = step_load_dataset(cfg, repos)
-    tokenizer, parts = step_tokenizer_and_proof(cfg, train_raw)
-    model = step_load_and_lora(cfg)
-    step_tokenize_and_train(cfg, model, tokenizer, parts, train_raw, val_raw, repos, data_info)
+    if args.export_only:
+        model, tokenizer = load_trained_adapter_for_export(cfg, repos)
+    else:
+        train_raw, val_raw, data_info = step_load_dataset(cfg, repos)
+        tokenizer, parts = step_tokenizer_and_proof(cfg, train_raw)
+        model = step_load_and_lora(cfg)
+        step_tokenize_and_train(cfg, model, tokenizer, parts, train_raw, val_raw, repos, data_info)
     step_export_and_gguf(cfg, hf_api, model, tokenizer, repos, args.skip_merge, args.skip_gguf)
     print("\n[ALL DONE]")
     return 0

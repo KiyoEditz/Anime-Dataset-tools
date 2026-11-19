@@ -226,6 +226,7 @@ def main(argv=None) -> int:
     p.add_argument("--gpu", action="store_true", help="build llama.cpp with CUDA (off by default)")
     p.add_argument("--mmproj", action="store_true", help="also export the vision projector")
     p.add_argument("--keep-intermediate", action="store_true")
+    p.add_argument("--private", action="store_true", help="create HF repo as private (default: public)")
     p.add_argument("--force", action="store_true", help="skip the disk pre-flight abort")
     p.add_argument("--dry-run", action="store_true", help="print the plan and exit")
     args = p.parse_args(argv)
@@ -264,8 +265,8 @@ def main(argv=None) -> int:
         from huggingface_hub import HfApi
 
         api = HfApi()
-        api.create_repo(args.repo, private=True, exist_ok=True)
-        log(f"pushing to {args.repo}")
+        api.create_repo(args.repo, private=args.private, exist_ok=True)
+        log(f"pushing to {args.repo} (private={args.private})")
 
     intermediate = out / f"elaina-{args.outtype}.gguf"
     produced: dict[str, float] = {}

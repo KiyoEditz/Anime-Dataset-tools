@@ -1,62 +1,62 @@
 {
   "train": {
-    "rows": 23988,
+    "rows": 24723,
     "user_chars": {
-      "mean": 82.4,
-      "p50": 60,
-      "p95": 234,
-      "max": 1230
+      "mean": 81.3,
+      "p50": 59,
+      "p95": 232,
+      "max": 1301
     },
     "response_chars": {
-      "mean": 80.0,
-      "p50": 48,
-      "p95": 249,
-      "max": 2348
+      "mean": 78.0,
+      "p50": 47,
+      "p95": 248,
+      "max": 1565
     },
     "system_chars": {
-      "short_rows": 23988,
+      "short_rows": 24723,
       "long_rows": 0
     },
     "by_lang": {
-      "en": 8342,
-      "id": 8179,
-      "jp": 7467
+      "en": 8414,
+      "id": 8287,
+      "jp": 8022
     },
     "by_kind": {
-      "dialogue": 20170,
-      "scene": 1144,
-      "multiturn": 2434,
+      "dialogue": 20805,
+      "scene": 1161,
+      "multiturn": 2517,
       "synthetic": 240
     },
-    "estimate_tokens_chars_over_3_6": 4535468
+    "estimate_tokens_chars_over_3_6": 4619795
   },
   "val": {
-    "rows": 1825,
+    "rows": 1796,
     "user_chars": {
-      "mean": 70.9,
-      "p50": 55,
-      "p95": 196,
+      "mean": 70.6,
+      "p50": 54,
+      "p95": 194,
       "max": 425
     },
     "response_chars": {
-      "mean": 69.4,
+      "mean": 68.8,
       "p50": 45,
-      "p95": 216,
+      "p95": 218,
       "max": 819
     },
     "system_chars": {
-      "short_rows": 1825,
+      "short_rows": 1796,
       "long_rows": 0
     },
     "by_lang": {
-      "en": 750,
-      "id": 567,
+      "en": 758,
+      "id": 530,
       "jp": 508
     },
     "by_kind": {
-      "dialogue": 1745,
-      "scene": 80
+      "dialogue": 1715,
+      "scene": 81
     },
-    "estimate_tokens_chars_over_3_6": 337488
+    "estimate_tokens_chars_over_3_6": 330108
   }
 }

@@ -1,24 +1,22 @@
-# Reference environment for training/ on Molab (NVIDIA Blackwell, sm_120).
+# Reference environment for training/ on Molab / Linux GPU (NVIDIA Blackwell, sm_120).
 #
-# These are NOT auto-installed. The notebook's install cell resolves and
-# verifies them at runtime, because gemma4 support currently lives in
-# transformers git main rather than a stable release. Pins are deliberately
-# loose; treat this file as documentation of what "known good" looks like.
+# System prerequisite for GGUF conversion (llama.cpp):
+#   apt-get update && apt-get install -y cmake build-essential
+#
+# Install Python dependencies:
+#   pip install -U -r training/requirements-training.txt
 
 # --- CUDA / PyTorch -------------------------------------------------------
-# Blackwell (sm_120) requires the cu128 wheel index:
+# Blackwell (sm_120) requires CUDA 12.8+ / PyTorch >= 2.7.0 (tested on 2.11.0+cu130):
 #   pip install --index-url https://download.pytorch.org/whl/cu128 torch torchvision
 torch>=2.7.0
-triton>=3.3.0
 
-# --- transformers stack ---------------------------------------------------
-# gemma4 => Gemma4ForConditionalGeneration (a VLM). Needs transformers >= 5.5.0.dev0:
-#   pip install "git+https://github.com/huggingface/transformers.git@main"
-transformers>=5.5.0.dev0
-tokenizers>=0.21
-accelerate>=1.0
-peft>=0.13
-trl>=0.12
+# --- transformers + PEFT stack (full bfloat16 LoRA, no Unsloth needed) ----
+# Gemma 4 VLM uses AutoModelForImageTextToText + PEFT directly on cuda:0.
+transformers>=5.20.0
+tokenizers>=0.23.0
+accelerate>=1.5.0
+peft>=0.15.0
 
 # --- GGUF conversion / tokenizer helpers ----------------------------------
 gguf
@@ -26,16 +24,12 @@ sentencepiece
 protobuf
 packaging
 
-# --- fine-tuning layer ----------------------------------------------------
-# Full bfloat16 LoRA (load_in_4bit=False) is used on 96 GB Blackwell.
-# Unsloth publishes version-matched wheels; install through its resolver:
-#   pip install unsloth unsloth_zoo
-unsloth
-unsloth_zoo
-
 # --- hub / IO -------------------------------------------------------------
-huggingface_hub>=0.26
+huggingface_hub>=1.0.0
 hf_transfer
-safetensors>=0.4
-datasets>=3.0
+safetensors>=0.8.0
+datasets>=4.0.0
 psutil
+
+# --- optional: Marimo notebook UI (not needed for train_elaina_cli.py) ----
+# marimo>=0.11.0
