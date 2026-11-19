@@ -6,3 +6,4 @@ merged/
 __pycache__/
 data_id/
 data_jp/
+.env

@@ -115,6 +115,10 @@ def step_env_gate(cfg: dict) -> dict:
     print(f"  torch/CUDA: {gpu.get('torch')} / {gpu.get('cuda')}")
     for w in gate["warnings"]:
         print(f"  [WARN] {w}")
+    if gpu.get("name") is None:
+        print("  [WARN] No CUDA GPU detected in this shell! Check `nvidia-smi` or ensure Molab GPU runtime is active.")
+        if not cfg["smoke"]:
+            raise SystemExit("Aborting full run: no CUDA GPU detected. Run `nvidia-smi` in terminal to check.")
     if gate["blocked"]:
         raise SystemExit(f"Environment gate blocked:\n{gate['message']}")
     return gate
@@ -217,7 +221,7 @@ def step_tokenizer_and_proof(cfg: dict, train_raw: list) -> tuple:
     if tokenizer.pad_token_id is None:
         tokenizer.pad_token = tokenizer.eos_token
 
-    parts = lib.derive_turn_parts(tokenizer)
+    parts = lib.derive_turn_parts(tokenizer.apply_chat_template)
     sample = train_raw[0]["messages"]
     evidence = lib.masking_report(tokenizer, sample, max_len=cfg["MAX_SEQ"], response_part=parts["response_part"])
     print(f"  response_part: {parts['response_part']!r} | eot_part: {parts['eot_part']!r}")
