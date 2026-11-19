@@ -66,11 +66,12 @@ def log(msg: str) -> None:
     print(f"[gguf {time.strftime('%H:%M:%S')}] {msg}", flush=True)
 
 
-def run(cmd, cwd=None, check=True) -> int:
+def run(cmd, cwd=None, check=True, env=None) -> int:
     log("$ " + " ".join(str(c) for c in cmd))
     proc = subprocess.Popen(
         [str(c) for c in cmd], cwd=str(cwd) if cwd else None,
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1,
+        env=env,
     )
     assert proc.stdout is not None
     for line in proc.stdout:
@@ -123,7 +124,20 @@ def ensure_llama(work: Path, revision: str | None, cpu_only: bool) -> tuple[Path
     convert = work / "convert_hf_to_gguf.py"
     if not convert.exists():
         raise RuntimeError(f"convert_hf_to_gguf.py not found in {work}")
+
+    gguf_py = work / "gguf-py"
+    if gguf_py.exists():
+        run([sys.executable, "-m", "pip", "install", "-q", "--no-deps", str(gguf_py)], check=False)
+
     return build, convert
+
+
+def _convert_env(convert: Path) -> dict[str, str]:
+    env = os.environ.copy()
+    extra = [str(convert.parent), str(convert.parent / "gguf-py")]
+    existing = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = os.pathsep.join(extra + ([existing] if existing else []))
+    return env
 
 
 def convert_intermediate(convert: Path, merged: Path, out: Path, outtype: str) -> Path:
@@ -132,7 +146,7 @@ def convert_intermediate(convert: Path, merged: Path, out: Path, outtype: str) -
            "--outfile", str(out), "--outtype", outtype]
     log(f"converting to {outtype} -> {out.name}")
     try:
-        run(cmd)
+        run(cmd, cwd=convert.parent, env=_convert_env(convert))
     except RuntimeError as exc:
         if outtype == "bf16":
             raise
@@ -149,7 +163,8 @@ def try_mmproj(convert: Path, merged: Path, out_dir: Path) -> Path | None:
     target = out_dir / "mmproj-F16.gguf"
     try:
         run([sys.executable, str(convert), str(merged),
-             "--mmproj", "--outfile", str(target), "--outtype", "f16"], check=True)
+             "--mmproj", "--outfile", str(target), "--outtype", "f16"],
+            cwd=convert.parent, env=_convert_env(convert), check=True)
     except Exception as exc:  # noqa: BLE001 - deliberately non-fatal
         log(f"mmproj export skipped: {type(exc).__name__}: {exc}")
         return None
