@@ -222,10 +222,9 @@ def step_tokenizer_and_proof(cfg: dict, train_raw: list) -> tuple:
         tokenizer.pad_token = tokenizer.eos_token
 
     parts = lib.derive_turn_parts(tokenizer.apply_chat_template)
-    sample = train_raw[0]["messages"]
-    evidence = lib.masking_report(tokenizer, sample, max_len=cfg["MAX_SEQ"], response_part=parts["response_part"])
+    evidence = lib.masking_report(tokenizer, train_raw[0], max_len=cfg["MAX_SEQ"], response_part=parts["response_part"])
     print(f"  response_part: {parts['response_part']!r} | eot_part: {parts['eot_part']!r}")
-    print(f"  masking ok: {evidence['ok']} | supervised={evidence['supervised_tokens']}/{evidence['total_tokens']}")
+    print(f"  masking ok: {evidence['ok']} | supervised={evidence['supervised_tokens']}/{len(evidence['input_ids'])}")
     if not evidence["ok"]:
         raise SystemExit(f"Masking proof failed: {evidence}")
     return tokenizer, parts
