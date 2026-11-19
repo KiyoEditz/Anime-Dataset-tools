@@ -317,7 +317,9 @@ def step_tokenize_and_train(cfg: dict, model, tokenizer, parts: dict, train_raw:
                 continue
             if t["truncated"]:
                 truncated += 1
-            feat = {"input_ids": t["input_ids"], "attention_mask": t["attention_mask"], "labels": t["labels"]}
+            feat = {"input_ids": t["input_ids"], "labels": t["labels"]}
+            if "attention_mask" in t:
+                feat["attention_mask"] = t["attention_mask"]
             if "token_type_ids" in t:
                 feat["token_type_ids"] = t["token_type_ids"]
             feats.append(feat)
