@@ -231,9 +231,9 @@ def main(argv=None) -> int:
     p.add_argument("--dry-run", action="store_true", help="print the plan and exit")
     args = p.parse_args(argv)
 
-    merged = Path(args.merged)
-    out = Path(args.out)
-    work = Path(args.work)
+    merged = Path(args.merged).resolve()
+    out = Path(args.out).resolve()
+    work = Path(args.work).resolve()
 
     if not merged.exists():
         raise SystemExit(f"--merged does not exist: {merged}")

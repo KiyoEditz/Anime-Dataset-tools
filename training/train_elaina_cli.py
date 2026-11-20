@@ -63,7 +63,15 @@ def build_cfg(args) -> dict:
     smoke = mode == "smoke"
     workdir = Path(args.workdir or os.environ.get("ELAINA_WORKDIR", "./work")).resolve()
     quants_env = os.environ.get("ELAINA_QUANTS", "")
-    default_quants = ["Q4_K_M"] if smoke else ["Q4_K_M", "Q6_K"]
+    default_quants = (
+        ["Q4_K_M"]
+        if smoke
+        else [
+            "Q2_K", "Q3_K_S", "Q3_K_M", "Q3_K_L",
+            "Q4_0", "Q4_K_S", "Q4_K_M",
+            "Q5_K_S", "Q5_K_M", "Q6_K", "Q8_0",
+        ]
+    )
     quants = [q.strip() for q in quants_env.split(",") if q.strip()] if quants_env else default_quants
     if args.quants:
         quants = [q.strip() for q in args.quants.split(",") if q.strip()]
